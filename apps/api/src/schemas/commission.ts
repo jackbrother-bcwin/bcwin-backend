@@ -169,6 +169,10 @@ export const teamMemberSchema = z.object({
         description: "Total betting amount",
         example: 5000,
     }),
+    betCount: z.number().optional().openapi({
+        description: "Number of bets (lottery + inout) in the selected day/lifetime",
+        example: 12,
+    }),
     totalDeposit: z.number().openapi({
         description: "Total deposit amount",
         example: 10000,

@@ -387,6 +387,7 @@ export const selfRebateRoutes = (app: OpenAPIHono) => {
                     gameCategory: true,
                     betAmount: true,
                     amount: true,
+                    rate: true,
                     claimed: true,
                     expired: true,
                 },
@@ -444,7 +445,10 @@ export const selfRebateRoutes = (app: OpenAPIHono) => {
                     title: categoryTitle(row.category),
                     date: row.date,
                     betAmount: row.betAmount,
-                    rate: SELF_REBATE_RATE,
+                    rate:
+                        row.betAmount > 0
+                            ? (row.rebateAmount / row.betAmount) * 100
+                            : 0,
                     rebateAmount: row.rebateAmount,
                     status,
                 };

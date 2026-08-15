@@ -80,6 +80,24 @@ async function sumUserBetting(
     );
 }
 
+async function countUserBets(
+    userId: string,
+    range?: DateRange
+): Promise<number> {
+    const createdAt = range ? { createdAt: range } : {};
+    const [wingo, fiveD, k3, moto, trx, inout] = await Promise.all([
+        prisma.wingoBet.count({ where: { userId, ...createdAt } }),
+        prisma.fiveDBet.count({ where: { userId, ...createdAt } }),
+        prisma.k3Bet.count({ where: { userId, ...createdAt } }),
+        prisma.motoBet.count({ where: { userId, ...createdAt } }),
+        prisma.trxWingoBet.count({ where: { userId, ...createdAt } }),
+        prisma.inoutBet.count({
+            where: { userId, isRolledback: false, ...createdAt },
+        }),
+    ]);
+    return wingo + fiveD + k3 + moto + trx + inout;
+}
+
 const teamMembersResponseSchema = z.object({
     success: z.boolean().openapi({
         description: "Whether the request was successful",
@@ -300,7 +318,7 @@ export const teamRoutes = (app: OpenAPIHono) => {
 
             // Short cache (20s). v6 = 6-stat overview box support
             const mainCacheKey = CacheKey.teamMembers(user.id);
-            const fieldKey = `v6-layer:${layer || "all"}-username:${
+            const fieldKey = `v7-layer:${layer || "all"}-username:${
                 username || "all"
             }-date:${date || "all"}-page:${page}-limit:${limitNum}`;
 
@@ -313,6 +331,7 @@ export const teamRoutes = (app: OpenAPIHono) => {
                     serialNumber?: number;
                     layer: number;
                     totalBetting: number;
+                    betCount?: number;
                     totalDeposit: number;
                     commissionGenerated: number;
                     createdAt: string;
@@ -408,9 +427,10 @@ export const teamRoutes = (app: OpenAPIHono) => {
                     };
                     if (dayRange) rebateWhere.createdAt = dayRange;
 
-                    const [totalBetting, deposits, rebatesFromMember] =
+                    const [totalBetting, betCount, deposits, rebatesFromMember] =
                         await Promise.all([
                             sumUserBetting(member.id, dayRange),
+                            countUserBets(member.id, dayRange),
                             prisma.deposit.aggregate({
                                 where: depositWhere,
                                 _sum: { amount: true },
@@ -429,6 +449,7 @@ export const teamRoutes = (app: OpenAPIHono) => {
                         serialNumber: member.serialNumber,
                         layer: L,
                         totalBetting,
+                        betCount,
                         totalDeposit: deposits._sum.amount || 0,
                         commissionGenerated:
                             rebatesFromMember._sum.amount || 0,
