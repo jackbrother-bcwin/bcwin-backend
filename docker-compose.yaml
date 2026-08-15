@@ -1,0 +1,167 @@
+services:
+  traefik:
+    image: traefik:v3.6
+    container_name: bcwin-traefik
+    command:
+      # - "--api.insecure=true"
+      - "--api=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+      - "--accesslog=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=admin@bcwin.club"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080" # Traefik dashboard
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dashboard.entrypoints=websecure"
+      - "traefik.http.routers.dashboard.rule=Host(`traefik.bcwin.club`)"
+      - "traefik.http.routers.dashboard.service=api@internal"
+      - "traefik.http.routers.dashboard.tls=true"
+      - "traefik.http.routers.dashboard.tls.certresolver=letsencrypt"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt_data:/letsencrypt
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  dozzle:
+    container_name: dozzle
+    image: amir20/dozzle:latest
+    environment:
+      DOZZLE_AUTH_PROVIDER: simple
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dozzle.entrypoints=websecure"
+      - "traefik.http.routers.dozzle.rule=Host(`dozzle.bcwin.club`)"
+      - "traefik.http.routers.dozzle.tls=true"
+      - "traefik.http.routers.dozzle.tls.certresolver=letsencrypt"
+      - "traefik.http.services.dozzle.loadbalancer.server.port=8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./dozzle:/data
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  adminer:
+    container_name: bcwin-adminer
+    image: adminer:latest
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.adminer.entrypoints=websecure"
+      - "traefik.http.routers.adminer.rule=Host(`adminer.bcwin.club`)"
+      - "traefik.http.routers.adminer.tls=true"
+      - "traefik.http.routers.adminer.tls.certresolver=letsencrypt"
+      - "traefik.http.services.adminer.loadbalancer.server.port=8080"
+      # Basic Auth (user: bcwin, pass: bcwin). 
+      # To generate a new hash: run `openssl passwd -apr1 <password>` and escape all "$" signs as "$$"
+      - "traefik.http.routers.adminer.middlewares=adminer-auth"
+      - "traefik.http.middlewares.adminer-auth.basicauth.users=bcwin:$$apr1$$9OYc4Y2Z$$qGyKUM1sNJgKtupoJCL/U1"
+    depends_on:
+      - db
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  api:
+    build: .
+    env_file:
+      - .env.docker.prod
+    deploy:
+      replicas: 4
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.rule=Host(`api.bcwin.club`)"
+      # - "traefik.http.routers.api.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.api.tls=true"
+      - "traefik.http.routers.api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.api.loadbalancer.server.port=3000"
+      - "traefik.http.services.api.loadbalancer.sticky.cookie=true"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  engine:
+    container_name: bcwin-engine
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: bun run apps/engine/src/index.ts
+    # ports:
+    #   - "3001:3001"
+    env_file:
+      - .env.docker.prod
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  db:
+    image: postgres:18.1-alpine
+    container_name: bcwin-db
+    environment:
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: root
+      POSTGRES_DB: bcwin
+    volumes:
+      - db_data:/var/lib/postgresql
+    networks:
+      - app-network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U root -d bcwin" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.4-alpine
+    container_name: bcwin-redis
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  frontend:
+    image: bcwin-frontend:latest
+    container_name: bcwin-frontend
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.rule=Host(`bcwin.club`) || Host(`www.bcwin.club`) || Host(`bcwin7.site`) || Host(`www.bcwin7.site`) || Host(`bcwin7.live`) || Host(`www.bcwin7.live`) || Host(`bcwin.click`) || Host(`www.bcwin.click`) || Host(`bcwin7.xyz`) || Host(`www.bcwin7.xyz`) || Host(`bcwin.best`) || Host(`www.bcwin.best`)"
+      - "traefik.http.routers.frontend.tls=true"
+      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+    depends_on:
+      - api
+    networks:
+      - app-network
+    restart: unless-stopped
+
+volumes:
+  db_data:
+  letsencrypt_data:
+
+networks:
+  app-network:
+    driver: bridge

@@ -1,0 +1,14 @@
+# deps
+node_modules/
+
+# prisma generated files
+packages/db/generated/
+ddev.sh
+deploy.sh
+bun.lock
+
+api.log
+.env
+.env.local
+.env.dev
+.env.prod

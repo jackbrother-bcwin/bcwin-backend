@@ -1,0 +1,41 @@
+{
+  "name": "bcwin",
+  "scripts": {
+    "dev-api": "PORT=3000 bun run dev-services && bun run --hot apps/api/src/index.ts",
+    "dev-engine": "PORT=3001 bun run dev-services && bun run --hot apps/engine/src/index.ts",
+    "dev-services": "docker compose -f docker-compose.dev.yaml up -d --wait",
+    "prisma:migrate": "bun --env-file .env prisma migrate dev",
+    "prisma:migrate:reset": "bun --env-file .env prisma migrate reset",
+    "prisma:migrate:deploy": "bun --env-file .env prisma migrate deploy --schema=packages/db/schema.prisma",
+    "prisma:migrate:status": "bun --env-file .env prisma migrate status --schema=packages/db/schema.prisma",
+    "prisma:studio": "bun --env-file .env prisma studio",
+    "prisma:generate": "bun --env-file .env prisma generate --schema=packages/db/schema.prisma",
+    "prisma:seed": "bun run packages/db/seeds/index.ts",
+    "seed:withdrawals": "bun --env-file .env scripts/seed-withdrawal-history.ts",
+    "prisma:backfill:rebate-level": "bun --env-file .env run scripts/backfill-rebate-level.ts",
+    "prisma:reset:prod-test": "bun --env-file .env prisma migrate reset --schema=packages/db/schema.prisma --force",
+    "start:api": "bun run prisma:migrate:deploy && bun run apps/api/src/index.ts",
+    "start:engine": "bun run apps/engine/src/index.ts",
+    "test": "bun test --env-file .env --preload ./tests/helpers/preload.ts tests/api tests/engine",
+    "test:deep": "bun test --env-file .env --preload ./tests/helpers/preload.ts tests/api tests/engine",
+    "test:legacy": "bun test --env-file .env --preload ./tests/helpers/preload.ts tests/cache-integration.test.ts tests/commission-vip-integration.test.ts",
+    "test:all": "bun test --env-file .env --preload ./tests/helpers/preload.ts tests/api tests/engine"
+  },
+  "dependencies": {
+    "@hono/zod-openapi": "^1.2.0",
+    "@prisma/adapter-pg": "^7.2.0",
+    "@prisma/client": "^7.2.0",
+    "@scalar/hono-api-reference": "^0.9.30",
+    "hono": "^4.11.3",
+    "ioredis": "^5.8.2",
+    "jose": "^6.1.3",
+    "node-cron": "^4.2.1",
+    "prom-client": "^15.1.3",
+    "zod": "^4.2.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/pg": "^8.16.0",
+    "prisma": "^7.2.0"
+  }
+}

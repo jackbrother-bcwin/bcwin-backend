@@ -1,0 +1,1387 @@
+generator client {
+    provider = "prisma-client"
+    output   = "./generated/prisma"
+}
+
+datasource db {
+    provider = "postgresql"
+}
+
+model User {
+    id            String    @id @default(uuid())
+    serialNumber  Int       @unique
+    username      String    @unique
+    mobileNumber  String    @unique
+    email         String?   @unique
+    password      String
+    referralCode  String    @unique
+    isBanned               Boolean   @default(false)
+    hasIllegalBetPenalty   Boolean   @default(false)
+    illegalBetPenaltyFactor Float?
+    isDemo                 Boolean   @default(false)
+    referredBy    String?
+    balance       Float     @default(0)
+    role          Role      @default(USER)
+    xp            Float     @default(0)
+    ip            String?
+    lastLoginDate DateTime?
+    loginStreak   Int       @default(0)
+
+    deposits                         Deposit[]
+    withdrawals                      Withdraw[]
+    bank                             Bank?
+    adminBalanceUpdateTransactions   AdminBalanceUpdateTransaction[] @relation("AdminBalanceUpdate")
+    adminBalanceUpdateTransactionsBy AdminBalanceUpdateTransaction[] @relation("AdminBalanceUpdateBy")
+    GiftRedemptions                  GiftRedemption[]
+    wingoBets                        WingoBet[]
+    fiveDBets                        FiveDBet[]
+    k3Bets                           K3Bet[]
+    motoBets                         MotoBet[]
+    trxwingoBets                     TrxWingoBet[]
+    InoutBets                        InoutBet[]
+    illegalBets                      IllegalBet[]
+    ipActivities                     IpActivity[]
+    rebates                          Rebate[]              @relation("RebateReceiver")
+    rebatesFrom                      Rebate[]              @relation("RebateFrom")
+    selfRebates                      SelfRebate[]
+    activityBonuses                  ActivityBonus[]
+
+    commissions       Commission[]             @relation("Commission")
+    commissionsFrom   Commission[]             @relation("CommissionFrom")
+    dailyCommissions  DailyCommissionSummary[]
+    vipLevel          UserVipLevel?
+    teamMetrics       TeamMetrics?
+    spinWheel         SpinWheel?
+    userQueries       UserQuery[]
+    salaryRules       SalaryRule[]
+    salaryPayments    SalaryPayment[]
+    autoSalaryClaims  AutoSalaryClaim[]        @relation("AutoSalaryClaimUser")
+    autoSalaryReviews AutoSalaryClaim[]        @relation("AutoSalaryClaimReviewer")
+    winStreak         UserWinStreak?
+    vipRewardClaims   VipRewardClaim[]
+    wagerRequirements WagerRequirement[]
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([referredBy])
+    @@index([role])
+    @@index([isBanned])
+    @@index([hasIllegalBetPenalty])
+    @@index([createdAt])
+}
+
+model UserQuery {
+    id         String      @id @default(uuid())
+    ticketId   String      @unique
+    user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId     String
+    type       QueryType
+    status     QueryStatus @default(CREATED)
+    subject    String
+    details    Json
+    adminNotes String?
+    resolvedAt DateTime?
+    createdAt  DateTime    @default(now())
+    updatedAt  DateTime    @updatedAt
+
+    @@index([userId])
+    @@index([status])
+    @@index([type])
+    @@index([userId, status])
+    @@index([createdAt])
+}
+
+/// Team multi-level rebate (independent of Commission). Receiver = upline.
+model Rebate {
+    id     String @id @default(uuid())
+    user   User   @relation("RebateReceiver", fields: [userId], references: [id], onDelete: Cascade)
+    userId String // who RECEIVES the rebate
+
+    fromUser   User?   @relation("RebateFrom", fields: [fromUserId], references: [id], onDelete: SetNull)
+    fromUserId String? // bettor (downline)
+
+    amount       Float
+    game         String // WINGO, INOUT, K3, …
+    gameCategory RebateGameCategory?
+    layer        Int? // 1–6
+    receiverVip  Int? // VIP of receiver at accrual time
+    rate         Float? // % applied
+    betAmount    Float?
+    betId        String?
+    settled      Boolean @default(false)
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([userId])
+    @@index([settled])
+    @@index([userId, createdAt])
+    @@index([userId, settled])
+    @@index([gameCategory])
+    @@index([fromUserId])
+}
+
+/// Rates from notes/docs/rebateratio/1.md — per VIP level × game category × layer 1–6
+model RebateRateConfig {
+    id       String             @id @default(uuid())
+    vipLevel Int // 0–10 (receiver)
+    category RebateGameCategory
+    layer1   Float
+    layer2   Float
+    layer3   Float
+    layer4   Float
+    layer5   Float
+    layer6   Float
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@unique([vipLevel, category])
+    @@index([category])
+    @@index([vipLevel])
+}
+
+/// Self-rebate % by XP VIP (currentLevel). VIP0 = 0; VIP1–10 from seed.
+model SelfRebateRateConfig {
+    id          String   @id @default(uuid())
+    vipLevel    Int      @unique // 0–10
+    ratePercent Float // e.g. 0.15 = 0.15%
+    createdAt   DateTime @default(now())
+    updatedAt   DateTime @updatedAt
+}
+
+/// Self-rebate: cashback on user's own bets, claimable daily.
+model SelfRebate {
+    id           String              @id @default(uuid())
+    user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId       String
+    betAmount    Float
+    rate         Float // % at bet time (XP VIP)
+    amount       Float // betAmount * rate / 100
+    vipLevel     Int? // XP VIP used for rate
+    game         String              // WINGO, K3, etc.
+    gameCategory RebateGameCategory?
+    betId        String?
+    claimed      Boolean             @default(false)
+    expired      Boolean             @default(false)
+    date         String              // IST date "YYYY-MM-DD" for grouping
+    claimedAt    DateTime?
+    createdAt    DateTime            @default(now())
+    updatedAt    DateTime            @updatedAt
+
+    @@index([userId])
+    @@index([userId, date])
+    @@index([userId, claimed, expired])
+    @@index([date])
+    @@index([claimed])
+}
+
+model ActivityBonus {
+    id        String              @id @default(uuid())
+    user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId    String
+    type      ActivityBonusType
+    status    ActivityBonusStatus
+    amount    Float
+    metadata  Json?
+    expiresAt DateTime?
+    claimAt   DateTime?
+    createdAt DateTime            @default(now())
+    updatedAt DateTime            @updatedAt
+
+    @@index([userId])
+    @@index([type])
+    @@index([status])
+    @@index([expiresAt])
+    @@index([userId, type, status])
+    @@index([userId, type, status, expiresAt])
+}
+
+model SpinWheel {
+    id                     String   @id @default(uuid())
+    user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId                 String   @unique
+    availableSpins         Int      @default(1) // Invite wheel: free daily + deposit extras
+    luckyAvailableSpins    Int      @default(0) // Lucky spin wheel (recharge event)
+    dailyCumulativeDeposit Float    @default(0) // Total deposits for current day
+    lastResetDate          DateTime @default(now()) // Date when spins were last reset
+    extraSpinsClaimed      Boolean  @default(false) // Whether extra spins have been claimed today
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([userId])
+    @@index([lastResetDate])
+}
+
+enum ActivityBonusType {
+    WEEKLY
+    DAILY
+    INVITATION
+    FIRST_DEPOSIT
+    ATTENDENCE
+    SPIN_WHEEL
+    WIN_STREAK
+    /// Promo % on successful INR gateway deposit (principal only)
+    INR_RECHARGE_BONUS
+    /// Promo % on successful USDT (OXAPAY) deposit (principal only)
+    USDT_RECHARGE_BONUS
+}
+
+enum ActivityBonusStatus {
+    PENDING // user has not completed the activity yet
+    COMPLETED_UNCOLLECTED // user has completed the activity but has not collected the bonus yet
+    COLLECTED // user has collected the bonus
+    EXPIRED // user has not collected the bonus within the time limit
+}
+
+model ActivityBonusTier {
+    id                 String            @id @default(uuid())
+    type               ActivityBonusType
+    depositRequirement Float? // For DAILY, FIRST_DEPOSIT, INVITATION, ATTENDENCE
+    betRequirement     Float? // For DAILY, WEEKLY
+    inviteRequirement  Int? // For INVITATION
+    dayRequirement     Int? // For ATTENDENCE
+    reward             Float // The bonus amount
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([type])
+    @@index([depositRequirement])
+    @@index([betRequirement])
+    @@index([inviteRequirement])
+    @@index([dayRequirement])
+}
+
+// Win streak rules set by admin
+model WinStreakRule {
+    id              String  @id @default(uuid())
+    consecutiveWins Int     @unique // e.g. 2, 3, 5, 7, 10
+    bonusPercentage Float // e.g. 10.0 = 10%
+    isActive        Boolean @default(true)
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([consecutiveWins])
+    @@index([isActive])
+}
+
+// Per-user win streak state (cross-game: Wingo, K3, 5D, TRXWingo)
+model UserWinStreak {
+    id              String    @id @default(uuid())
+    userId          String    @unique
+    user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+    currentStreak   Int       @default(0)
+    streakWinAmount Float     @default(0) // cumulative winnings in current streak
+    lastBetGame     String? // "WINGO" | "K3" | "FIVEDEE" | "TRXWINGO"
+    lastBetAt       DateTime?
+
+    updatedAt DateTime @updatedAt
+}
+
+model Ip {
+    id             String    @id @default(uuid())
+    ip             String    @unique
+    isBlacklisted  Boolean   @default(false)
+    reason         String?
+    riskLevel      RiskLevel @default(LOW)
+    lastActivityAt DateTime?
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([ip])
+    @@index([riskLevel])
+    @@index([lastActivityAt])
+}
+
+model IpActivity {
+    id           String         @id @default(uuid())
+    ip           String
+    userId       String?
+    activityType IpActivityType
+    metadata     Json?
+    createdAt    DateTime       @default(now())
+
+    user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+    @@index([ip])
+    @@index([userId])
+    @@index([activityType])
+    @@index([createdAt])
+    @@index([ip, activityType])
+    @@index([ip, createdAt])
+}
+
+enum RiskLevel {
+    LOW
+    MEDIUM
+    HIGH
+}
+
+enum IpActivityType {
+    LOGIN
+    REGISTER
+    BETTING
+    DEPOSIT
+    WITHDRAWAL
+}
+
+model Config {
+    id String @id @default(uuid())
+
+    upiIds                            String[]
+    cxpayEnabled                      Boolean        @default(false)
+    xdpayEnabled                      Boolean        @default(false)
+    oxapayEnabled                     Boolean        @default(false)
+    upiEnabled                        Boolean        @default(false)
+    serviceFeePercent                 Float          @default(2)
+    minDepositAmount                  Int            @default(100)
+    minWithdrawAmount                 Int            @default(300)
+    wager                             Float          @default(1)
+    rewardWagerFactor                 Float          @default(1.0)
+    illegalBetPenaltyFactor           Float          @default(3.0)
+    maxWithdrawApplicationsPerDay     Int            @default(3)
+    maintananceMode                   Boolean        @default(false)
+    maintananceMessage                String?
+    wingoAlgorithm                    WingoAlgorithm @default(RANDOM)
+    announcement                      String?
+    rebatePercent                     Float          @default(0.5)
+    inrToUsdtPaymentConversionRate    Float          @default(105.0)
+    inrToUsdtWithdrawalConversionRate Float          @default(100.0)
+    /// % of INR principal credited as ActivityBonus INR_RECHARGE_BONUS (0 = off)
+    inrDepositBonusPercent            Float          @default(0)
+    /// % of USDT principal (after pay rate) as USDT_RECHARGE_BONUS (default 5)
+    usdtDepositBonusPercent           Float          @default(5)
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+}
+
+enum WingoAlgorithm {
+    RANDOM
+    WINNING
+    TRX
+}
+
+model Notification {
+    id         String                 @id @default(uuid())
+    title      String
+    message    String
+    type       NotificationType       @default(GLOBAL)
+    importance NotificationImportance @default(LOW)
+    isActive   Boolean                @default(true)
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([type])
+    @@index([isActive])
+    @@index([createdAt])
+}
+
+enum NotificationType {
+    GLOBAL
+    GLOBAL1
+}
+
+enum NotificationImportance {
+    LOW
+    MEDIUM
+    HIGH
+    URGENT
+}
+
+model SalaryRule {
+    id             String          @id @default(uuid())
+    userId         String
+    user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+    amount         Float
+    frequency      SalaryFrequency
+    maxPayments    Int
+    paidCount      Int             @default(0)
+    startDate      DateTime
+    nextPaymentAt  DateTime
+    immediateFirst Boolean         @default(false)
+    addToTurnover  Boolean         @default(false)
+    isActive       Boolean         @default(true)
+
+    payments SalaryPayment[]
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([userId])
+    @@index([isActive])
+    @@index([nextPaymentAt])
+    @@index([isActive, nextPaymentAt])
+}
+
+model SalaryPayment {
+    id           String     @id @default(uuid())
+    salaryRule   SalaryRule @relation(fields: [salaryRuleId], references: [id], onDelete: Cascade)
+    salaryRuleId String
+    userId       String
+    user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+    amount       Float
+
+    createdAt DateTime @default(now())
+
+    @@index([userId])
+    @@index([salaryRuleId])
+    @@index([createdAt])
+}
+
+enum SalaryFrequency {
+    HOURLY
+    DAILY
+    MONTHLY
+    ONE_TIME
+}
+
+// Automatic salary slabs — admin generate → approve/reject → credit
+enum AutoSalaryClaimStatus {
+    PENDING
+    APPROVED
+    REJECTED
+}
+
+model AutoSalaryClaim {
+    id           String                @id @default(uuid())
+    userId       String
+    user         User                  @relation("AutoSalaryClaimUser", fields: [userId], references: [id], onDelete: Cascade)
+    /// IST calendar day stored as that day's 00:00+05:30 instant
+    periodDate   DateTime
+    amount       Float
+    slabIndex    Int
+    directCount  Int
+    activeCount  Int
+    teamDeposit  Float
+    status       AutoSalaryClaimStatus @default(PENDING)
+    reviewedById String?
+    reviewedBy   User?                 @relation("AutoSalaryClaimReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+    reviewedAt   DateTime?
+    rejectReason String?
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@unique([userId, periodDate])
+    @@index([status, periodDate])
+    @@index([periodDate])
+    @@index([userId])
+}
+
+model IllegalBet {
+    id        String @id @default(uuid())
+    user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId    String
+    betAmount Float
+    betGame   String
+    betType   String
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([userId])
+    @@index([createdAt])
+}
+
+model AdminBalanceUpdateTransaction {
+    id        String   @id @default(uuid())
+    user      User     @relation("AdminBalanceUpdate", fields: [userId], references: [id], onDelete: Cascade)
+    userId    String
+    amount    Float
+    by        User     @relation("AdminBalanceUpdateBy", fields: [byUserId], references: [id], onDelete: Cascade)
+    byUserId  String
+    reason    String
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([userId])
+    @@index([createdAt])
+}
+
+model Bank {
+    id           String  @id @default(uuid())
+    fullName     String?
+    bankAccount  String?
+    bankName     String?
+    accountType  String?
+    ifsc         String?
+    trc20Address String?
+    bep20Address String?
+    upiId        String?
+
+    user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId String @unique
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+}
+
+// VIP Level tracking — dual track (ADR-0012):
+// - currentLevel = XP VIP (rewards only; sticky high-water)
+// - rebateLevel  = agency rebate ladder (team metrics; sticky high-water; keys RebateRateConfig)
+model UserVipLevel {
+    id           String @id @default(uuid())
+    user         User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId       String @unique
+    currentLevel Int    @default(0) // XP VIP 0–10 (rewards)
+    rebateLevel  Int    @default(0) // Rebate/agency 0–10 (rate table)
+    teamSize     Int    @default(0)
+    teamBetting  Float  @default(0) // Total team betting amount (L1–L6 snapshot)
+    teamDeposit  Float  @default(0) // Total team deposit amount
+
+    // Promotion tracking
+    lastCalculatedAt DateTime @default(now())
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([currentLevel])
+    @@index([rebateLevel])
+    @@index([lastCalculatedAt])
+}
+
+// Commission records
+model Commission {
+    id         String @id @default(uuid())
+    user       User   @relation("Commission", fields: [userId], references: [id], onDelete: Cascade)
+    userId     String
+    fromUser   User   @relation("CommissionFrom", fields: [fromUserId], references: [id], onDelete: Cascade)
+    fromUserId String
+
+    // Commission details
+    layer            Int // 1-6 subordinate level
+    userVipLevel     Int // VIP level at time of commission
+    commissionRate   Float // Percentage rate applied
+    betAmount        Float // Original bet amount from subordinate
+    commissionAmount Float // Calculated commission amount
+
+    // Bet reference (polymorphic)
+    betType String // "WINGO", "5D", "K3", "MOTO"
+    betId   String // Reference to specific bet
+
+    // Calculation date (for daily aggregation)
+    calculationDate DateTime // Date when commission was calculated (truncated to day)
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([userId])
+    @@index([fromUserId])
+    @@index([layer])
+    @@index([calculationDate])
+    @@index([betType])
+    @@index([userId, calculationDate])
+    @@index([fromUserId, calculationDate])
+}
+
+// Daily commission summary for quick API responses
+model DailyCommissionSummary {
+    id     String   @id @default(uuid())
+    user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId String
+    date   DateTime // Date (truncated to day)
+
+    totalCommission  Float @default(0)
+    layer1Commission Float @default(0)
+    layer2Commission Float @default(0)
+    layer3Commission Float @default(0)
+    layer4Commission Float @default(0)
+    layer5Commission Float @default(0)
+    layer6Commission Float @default(0)
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@unique([userId, date])
+    @@index([date])
+    @@index([userId])
+}
+
+// Team metrics cache for VIP calculations
+model TeamMetrics {
+    id     String @id @default(uuid())
+    user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId String @unique
+
+    // Direct team (Layer 1)
+    directTeamSize    Int   @default(0)
+    directTeamBetting Float @default(0)
+    directTeamDeposit Float @default(0)
+
+    // Total team (Layers 1-6)
+    totalTeamSize    Int   @default(0)
+    totalTeamBetting Float @default(0)
+    totalTeamDeposit Float @default(0)
+
+    lastUpdated DateTime @default(now())
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([totalTeamSize])
+    @@index([totalTeamBetting])
+    @@index([totalTeamDeposit])
+    @@index([lastUpdated])
+}
+
+model CommissionRateConfig {
+    id       String @id @default(uuid())
+    vipLevel Int    @unique // 0-10
+    layer1   Float // Commission rate for layer 1
+    layer2   Float // Commission rate for layer 2
+    layer3   Float // Commission rate for layer 3
+    layer4   Float // Commission rate for layer 4
+    layer5   Float // Commission rate for layer 5
+    layer6   Float // Commission rate for layer 6
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([vipLevel])
+}
+
+model VipLevelRequirement {
+    id            String  @id @default(uuid())
+    level         Int     @unique // 0-10
+    expRequired   Float   @default(0)
+    levelUpReward Float   @default(0)
+    monthlyReward Float   @default(0)
+    rebateRate    String?
+    teamSize      Int     @default(0)
+    teamBetting   Float   @default(0)
+    teamDeposit   Float   @default(0)
+
+    vipName          String?
+    minBet           Float?
+    oneTimeBonus     Float?
+    monthlyBonus     Float?
+    rebatePercentage Float?
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([level])
+}
+
+enum VipRewardType {
+    LEVEL_UP
+    MONTHLY
+}
+
+model VipRewardClaim {
+    id        String        @id @default(uuid())
+    user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId    String
+    level     Int
+    type      VipRewardType
+    amount    Float
+    monthYear String? // "YYYY-MM" for MONTHLY rewards
+    createdAt DateTime      @default(now())
+
+    @@unique([userId, level, type, monthYear])
+    @@index([userId])
+    @@index([userId, type])
+}
+
+model Deposit {
+    id         String             @id @default(uuid())
+    orderId    String             @unique
+    amount     Int
+    method     String
+    status     PaymentOrderStatus
+    user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId     String
+    metadata   Json?
+    usdtAmount Float?
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([userId])
+    @@index([status])
+    @@index([createdAt])
+    @@index([userId, status])
+}
+
+model Withdraw {
+    id          String              @id @default(uuid())
+    orderId     String              @unique
+    amount      Int
+    method      String
+    status      WithdrawOrderStatus
+    user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId      String
+    note        String?
+    usdtAmount  Float?
+    cryptoChain String?
+    metadata    Json?
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([userId])
+    @@index([status])
+    @@index([createdAt])
+    @@index([userId, status])
+}
+
+model Otp {
+    id           String  @id @default(uuid())
+    mobileNumber String? @unique
+    email        String? @unique
+    otp          String
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+}
+
+model Gift {
+    id              String           @id @default(uuid())
+    code            String           @unique
+    title           String?
+    description     String?
+    type            GiftType
+    amount          Float
+    totalRedeemable Int
+    totalRedeemed   Int
+    exaushted       Boolean          @default(false)
+    GiftRedemptions GiftRedemption[]
+    isActive        Boolean          @default(true)
+    validFrom       DateTime         @default(now())
+    validTill       DateTime?
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([exaushted])
+}
+
+model GiftRedemption {
+    id     String @id @default(uuid())
+    user   User   @relation(fields: [userId], references: [id])
+    userId String
+    gift   Gift   @relation(fields: [giftId], references: [id])
+    giftId String
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@unique([userId, giftId])
+    @@index([giftId])
+}
+
+model InoutGame {
+    id String @id @default(uuid())
+
+    title       String
+    gameMode    String  @unique
+    description String
+    category    String
+    icon        String
+    multiplayer Boolean
+    rtp         Float
+    bonusTypes  Json?
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([title])
+    @@index([gameMode])
+    @@index([category])
+}
+
+model InoutBet {
+    id     String @id @default(uuid())
+    user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId String
+
+    token         String
+    gameMode      String
+    betAmount     Float
+    currency      String
+    operator      String
+    transactionId String @unique
+    gameId        String
+
+    isSettled    Boolean @default(false)
+    isRolledback Boolean @default(false)
+    winAmount    Float
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+}
+
+model WingoPeriod {
+    id              String            @id @default(uuid())
+    periodNumber    String
+    durationSeconds Int // 30, 60, 180, 300
+    startTime       DateTime
+    endTime         DateTime
+    resultNumber    Int? // 0-9, null until resolved
+    resultColor     WingoResultColor? // RED, GREEN, VIOLET
+    resultSize      WingoResultSize? // BIG, SMALL
+    status          PeriodStatus      @default(ACTIVE)
+
+    wingoBets       WingoBet[]
+    wingoBetResults WingoBetResult[]
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@unique([periodNumber, durationSeconds])
+    @@index([durationSeconds])
+    @@index([startTime])
+    @@index([status])
+    @@index([periodNumber])
+}
+
+model WingoBet {
+    id       String      @id @default(uuid())
+    user     User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId   String
+    period   WingoPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+    periodId String
+
+    betAmount      Float // Original bet amount
+    contractAmount Float // After service fee deduction (98%)
+    betType        WingoBetType
+    betChoice      String // RED, GREEN, VIOLET, BIG, SMALL, or 0-9
+
+    status BetStatus @default(PENDING)
+
+    wingoBetResult WingoBetResult?
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([userId])
+    @@index([periodId])
+    @@index([status])
+    @@index([betType])
+    @@index([createdAt])
+    @@index([userId, periodId])
+}
+
+model WingoBetResult {
+    id       String      @id @default(uuid())
+    bet      WingoBet    @relation(fields: [betId], references: [id], onDelete: Cascade)
+    betId    String      @unique
+    period   WingoPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+    periodId String
+
+    isWin       Boolean
+    winAmount   Float    @default(0)
+    multiplier  Float? // Applied multiplier for reference
+    processedAt DateTime @default(now())
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([periodId])
+    @@index([isWin])
+    @@index([processedAt])
+}
+
+model FiveDPeriod {
+    id              String       @id @default(uuid())
+    periodNumber    String
+    durationSeconds Int // 30, 60, 180, 300
+    startTime       DateTime
+    endTime         DateTime
+    resultNumber    String? // 5-digit number (00000-99999)
+    resultDigitA    Int? // First digit (0-9)
+    resultDigitB    Int? // Second digit (0-9)
+    resultDigitC    Int? // Third digit (0-9)
+    resultDigitD    Int? // Fourth digit (0-9)
+    resultDigitE    Int? // Fifth digit (0-9)
+    resultSum       Int? // Sum of all digits (0-45)
+    status          PeriodStatus @default(ACTIVE)
+
+    fiveDBets       FiveDBet[]
+    fiveDBetResults FiveDBetResult[]
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@unique([periodNumber, durationSeconds])
+    @@index([durationSeconds])
+    @@index([startTime])
+    @@index([status])
+    @@index([periodNumber])
+}
+
+model FiveDBet {
+    id       String      @id @default(uuid())
+    user     User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId   String
+    period   FiveDPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+    periodId String
+
+    betAmount      Float // Original bet amount
+    contractAmount Float // After service fee deduction (98%)
+    betType        FiveDBetType
+    betCategory    FiveDBetCategory // POSITION or SUM
+    betChoice      String // Specific bet choice (0-9, LOW, HIGH, ODD, EVEN for position; 0-45 for sum)
+    position       FiveDPosition? // A, B, C, D, E for position bets
+
+    status BetStatus @default(PENDING)
+
+    fiveDBetResult FiveDBetResult?
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([userId])
+    @@index([periodId])
+    @@index([status])
+    @@index([betType])
+    @@index([betCategory])
+    @@index([position])
+    @@index([createdAt])
+    @@index([userId, periodId])
+}
+
+model FiveDBetResult {
+    id       String      @id @default(uuid())
+    bet      FiveDBet    @relation(fields: [betId], references: [id], onDelete: Cascade)
+    betId    String      @unique
+    period   FiveDPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+    periodId String
+
+    isWin       Boolean
+    winAmount   Float    @default(0)
+    multiplier  Float? // Applied multiplier for reference
+    processedAt DateTime @default(now())
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([periodId])
+    @@index([isWin])
+    @@index([processedAt])
+}
+
+model K3Period {
+    id              String   @id @default(uuid())
+    periodNumber    String
+    durationSeconds Int // 30, 60, 180, 300
+    startTime       DateTime
+    endTime         DateTime
+
+    // Dice results (1-6 each)
+    dice1 Int? // null until resolved
+    dice2 Int?
+    dice3 Int?
+
+    // Calculated results
+    sum            Int? // d1 + d2 + d3 (3-18)
+    isTriple       Boolean? // all three dice same
+    isDouble       Boolean? // at least two dice same (but not triple)
+    isAllDifferent Boolean? // all three dice unique
+    isConsecutive  Boolean? // consecutive sequence (123, 234, 345, 456)
+    isBig          Boolean? // sum >= 11
+    isSmall        Boolean? // sum <= 10
+    isOdd          Boolean? // sum is odd
+    isEven         Boolean? // sum is even
+
+    status       PeriodStatus  @default(ACTIVE)
+    k3Bets       K3Bet[]
+    k3BetResults K3BetResult[]
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@unique([periodNumber, durationSeconds])
+    @@index([durationSeconds])
+    @@index([startTime])
+    @@index([status])
+    @@index([periodNumber])
+}
+
+model K3Bet {
+    id       String   @id @default(uuid())
+    user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId   String
+    period   K3Period @relation(fields: [periodId], references: [id], onDelete: Cascade)
+    periodId String
+
+    betAmount      Float // Original bet amount
+    contractAmount Float // After service fee deduction (98%)
+    betType        K3BetType
+    betChoice      String // Varies by bet type
+
+    status BetStatus @default(PENDING)
+
+    k3BetResult K3BetResult?
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([userId])
+    @@index([periodId])
+    @@index([status])
+    @@index([betType])
+    @@index([createdAt])
+    @@index([userId, periodId])
+}
+
+model K3BetResult {
+    id       String   @id @default(uuid())
+    bet      K3Bet    @relation(fields: [betId], references: [id], onDelete: Cascade)
+    betId    String   @unique
+    period   K3Period @relation(fields: [periodId], references: [id], onDelete: Cascade)
+    periodId String
+
+    isWin       Boolean
+    winAmount   Float    @default(0)
+    multiplier  Float? // Applied multiplier for reference
+    processedAt DateTime @default(now())
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([periodId])
+    @@index([isWin])
+    @@index([processedAt])
+}
+
+model MotoPeriod {
+    id              String       @id @default(uuid())
+    periodNumber    String
+    durationSeconds Int // 30, 60, 180, 300
+    startTime       DateTime
+    endTime         DateTime
+    firstPlace      Int? // 1-10, null until resolved
+    secondPlace     Int? // 1-10, null until resolved
+    thirdPlace      Int? // 1-10, null until resolved
+    status          PeriodStatus @default(ACTIVE)
+
+    motoBets       MotoBet[]
+    motoBetResults MotoBetResult[]
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@unique([periodNumber, durationSeconds])
+    @@index([durationSeconds])
+    @@index([startTime])
+    @@index([status])
+    @@index([periodNumber])
+}
+
+model MotoBet {
+    id       String     @id @default(uuid())
+    user     User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId   String
+    period   MotoPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+    periodId String
+
+    betAmount      Float // Original bet amount
+    contractAmount Float // After service fee deduction (98%)
+    betType        MotoBetType
+    betChoice      String // Bike number (1-10), "odd", "even", "big", "small"
+    targetPosition MotoPosition // Which position to bet on (1st, 2nd, 3rd)
+
+    status BetStatus @default(PENDING)
+
+    motoBetResult MotoBetResult?
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([userId])
+    @@index([periodId])
+    @@index([status])
+    @@index([betType])
+    @@index([createdAt])
+    @@index([userId, periodId])
+}
+
+model MotoBetResult {
+    id       String     @id @default(uuid())
+    bet      MotoBet    @relation(fields: [betId], references: [id], onDelete: Cascade)
+    betId    String     @unique
+    period   MotoPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+    periodId String
+
+    isWin       Boolean
+    winAmount   Float    @default(0)
+    multiplier  Float? // Applied multiplier for reference
+    processedAt DateTime @default(now())
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([periodId])
+    @@index([isWin])
+    @@index([processedAt])
+}
+
+model TrxWingoPeriod {
+    id              String            @id @default(uuid())
+    periodNumber    String
+    durationSeconds Int // 30, 60, 180, 300
+    startTime       DateTime
+    endTime         DateTime
+    resultNumber    Int? // 0-9, null until resolved
+    resultColor     WingoResultColor? // RED, GREEN, VIOLET
+    resultSize      WingoResultSize? // BIG, SMALL
+    blockNumber     Int? // null until resolved
+    blockHash       String? // null until resolved
+    blockTimestamp  String? // null until resolved
+    status          PeriodStatus      @default(ACTIVE)
+
+    trxWingoBets       TrxWingoBet[]
+    trxWingoBetResults TrxWingoBetResult[]
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@unique([periodNumber, durationSeconds])
+    @@index([durationSeconds])
+    @@index([startTime])
+    @@index([status])
+    @@index([periodNumber])
+}
+
+model TrxWingoBet {
+    id       String         @id @default(uuid())
+    user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+    userId   String
+    period   TrxWingoPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+    periodId String
+
+    betAmount      Float // Original bet amount
+    contractAmount Float // After service fee deduction (98%)
+    betType        WingoBetType
+    betChoice      String // RED, GREEN, VIOLET, BIG, SMALL, or 0-9
+
+    status BetStatus @default(PENDING)
+
+    trxWingoBetResult TrxWingoBetResult?
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([userId])
+    @@index([periodId])
+    @@index([status])
+    @@index([betType])
+    @@index([createdAt])
+    @@index([userId, periodId])
+}
+
+model TrxWingoBetResult {
+    id       String         @id @default(uuid())
+    bet      TrxWingoBet    @relation(fields: [betId], references: [id], onDelete: Cascade)
+    betId    String         @unique
+    period   TrxWingoPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+    periodId String
+
+    isWin       Boolean
+    winAmount   Float    @default(0)
+    multiplier  Float? // Applied multiplier for reference
+    processedAt DateTime @default(now())
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([periodId])
+    @@index([isWin])
+    @@index([processedAt])
+}
+
+enum PeriodStatus {
+    ACTIVE // Period running, accepting bets
+    ENDED // Period ended, calculating results
+    RESOLVED // Results calculated and payouts processed
+}
+
+enum BetStatus {
+    PENDING // Bet placed, period not resolved
+    WON // Bet won, payout processed
+    LOST // Bet lost
+}
+
+enum MotoBetType {
+    POSITION // Exact bike number in position
+    ODD_EVEN // Odd/Even number in position
+    BIG_SMALL // Big (6-10) / Small (1-5) in position
+}
+
+enum MotoPosition {
+    FIRST // 1st place
+    SECOND // 2nd place
+    THIRD // 3rd place
+}
+
+enum K3BetType {
+    SUM // Specific sum (3-18)
+    TRIPLE_ANY // Any triple (111, 222, ..., 666)
+    TRIPLE_SPECIFIC // Specific triple (e.g., 333)
+    DOUBLE_ANY // Any double (but not triple)
+    DOUBLE_SPECIFIC // Specific double combo (e.g., 4,4,6)
+    ALL_DIFFERENT // All dice unique
+    TWO_NUMBERS // Both chosen numbers appear
+    CONSECUTIVE // Consecutive sequence
+    BIG // Sum 11-18
+    SMALL // Sum 3-10
+    ODD // Sum is odd
+    EVEN // Sum is even
+}
+
+enum FiveDBetType {
+    EXACT_NUMBER // Position exact number (0-9)
+    LOW // Position low (0-4) or Sum low (0-22)
+    HIGH // Position high (5-9) or Sum high (23-45)
+    ODD // Position odd or Sum odd
+    EVEN // Position even or Sum even
+    SUM_EXACT // Sum exact number (0-45)
+}
+
+enum FiveDBetCategory {
+    POSITION // Position-based bets (A-E)
+    SUM // Sum-based bets
+}
+
+enum FiveDPosition {
+    A // First digit
+    B // Second digit  
+    C // Third digit
+    D // Fourth digit
+    E // Fifth digit
+}
+
+enum WingoResultColor {
+    RED
+    GREEN
+    VIOLET
+}
+
+enum WingoResultSize {
+    BIG
+    SMALL
+}
+
+enum WingoBetType {
+    COLOR // RED, GREEN, VIOLET
+    NUMBER // 0-9
+    SIZE // BIG, SMALL
+}
+
+enum Role {
+    USER
+    ADMIN
+    SUB_ADMIN
+    AGENT
+}
+
+/// Game category for multi-level team rebate rates (independent of commission)
+/// Display order (Commission Details): Lottery → Slots → Casino → Sports → Chess/card
+enum RebateGameCategory {
+    LOTTERY
+    SLOTS
+    CASINO
+    SPORTS
+    RUMMY
+}
+
+enum PaymentOrderStatus {
+    PROCESSING
+    SUCCESS
+    FAILED
+}
+
+enum WithdrawOrderStatus {
+    GENERATED
+    PROCESSING
+    SUCCESS
+    FAILED
+    USER_CANCELED
+}
+
+enum GiftType {
+    FIXED
+    UPTO
+}
+
+enum QueryType {
+    DEPOSIT
+    WITHDRAWAL
+    BANK_CHANGE
+    BONUS
+}
+
+enum QueryStatus {
+    CREATED
+    VERIFIED
+    PROCESSING
+    COMPLETED
+    REJECTED
+}
+
+/// Which spin product a rule/reward belongs to
+enum SpinWheelKind {
+    INVITE // Invite Wheel (bottom-nav / activity invite)
+    LUCKY // Lucky Spin (activity lucky spin — rupee prizes only)
+}
+
+model LuckySpinRule {
+    id          String        @id @default(uuid())
+    kind        SpinWheelKind @default(INVITE)
+    minDeposit  Float
+    spinChances Int
+    isActive    Boolean       @default(true)
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([isActive])
+    @@index([kind, isActive])
+}
+
+model LuckySpinReward {
+    id          String        @id @default(uuid())
+    kind        SpinWheelKind @default(INVITE)
+    amount      Float
+    probability Float // weight
+    isActive    Boolean       @default(true)
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([isActive])
+    @@index([kind, isActive])
+}
+
+enum WagerRequirementType {
+    RECHARGE
+    REWARD
+}
+
+model WagerRequirement {
+    id            String               @id @default(uuid())
+    userId        String
+    user          User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+    sourceType    WagerRequirementType
+    sourceId      String?
+    amount        Float
+    multiplier    Float                @default(1.0)
+    requiredWager Float
+    wagerCleared  Float                @default(0)
+    isCleared     Boolean              @default(false)
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    @@index([userId])
+    @@index([userId, isCleared])
+    @@index([createdAt])
+}

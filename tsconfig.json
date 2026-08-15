@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "hono/jsx",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "target": "ESNext",
+    "paths": {
+      "@/*": ["./apps/api/src/*"],
+      "@bcwin/config": ["./packages/config"],
+      "@bcwin/config/*": ["./packages/config/*"],
+      "@bcwin/db": ["./packages/db"],
+      "@bcwin/db/*": ["./packages/db/*"],
+      "@bcwin/logger": ["./packages/logger"],
+      "@bcwin/logger/*": ["./packages/logger/*"],
+      "@bcwin/cache": ["./packages/cache"],
+      "@bcwin/cache/*": ["./packages/cache/*"],
+      "@bcwin/websocket": ["./packages/websocket"],
+      "@bcwin/websocket/*": ["./packages/websocket/*"],
+      "@bcwin/*": ["./packages/*"]
+    }
+  }
+}

@@ -1,0 +1,110 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  JWT_SECRET: "helloThisIsASecretShshsh"
+  DOMAIN: "bcwin.club"
+  API_PORT: 3000
+  ENGINE_PORT: 3001
+  DATABASE_URL: "postgresql://root:root@db:5432/bcwin"
+  REDIS_URL: "redis://redis:6379"
+  LAAFIC_APPID: "BXAvN12j"
+  LAAFFIC_APIKEY: "uHdcltl7"
+  LAAFFIC_API_SECRET: "HLl59k5t"
+  MAILEROO_API_KEY: "14ef2138f027bc8d674e712d110b6af807e11477eb464590aaabab0bd3980175"
+  MAILEROO_FROM_EMAIL: "noreply@bcwin.club"
+  MAILEROO_SMTP_PASS: "5911116aa49ea3618401f0e9"
+  CXPAY_PAYMENT_NOTIFICATION_URL: "https://api.bcwin.club/api/v1/callback/cxpay/deposit"
+  CXPAY_PAYMENT_RETURN_URL: "https://api.bcwin.club"
+  CXPAY_WITHDRAW_NOTIFICATION_URL: "https://api.bcwin.club/api/v1/callback/cxpay/withdraw"
+  CXPAY_MERCHANT_KEY: "83c36221f904475c9223f18a2698521d"
+  CXPAY_MERCHANT_ID: "26289762"
+  CXPAY_PAYMENT_PAY_CODE: "32901"
+  CXPAY_WITHDRAW_PAY_CODE: "32911"
+  CXPAY_TEST_PAY_CODE: "101"
+  CXPAY_TEST_MODE: 
+  XDPAY_PAYMENT_NOTIFICATION_URL: "https://api.bcwin.club/api/v1/callback/xdpay/deposit"
+  XDPAY_WITHDRAW_NOTIFICATION_URL: "https://api.bcwin.club/api/v1/callback/xdpay/withdraw"
+  XDPAY_MERCHANT_ID: "mock_merchant_id"
+  XDPAY_MERCHANT_KEY: "mock_merchant_key"
+  XDPAY_TEST_MODE: true
+  OXAPAY_MERCHANT_API_KEY: "3Q94B4-ZDXPZY-VCUYV3-TQYVLM"
+  OXAPAY_PAYOUT_API_KEY: "UWW8UT-1MNQOI-OF5LAU-8ZDFCE"
+  OXAPAY_PAYMENT_NOTIFICATION_URL: "https://api.bcwin.club/api/v1/callback/oxapay/deposit"
+  OXAPAY_WITHDRAW_NOTIFICATION_URL: "https://api.bcwin.club/api/v1/callback/oxapay/withdraw"
+  OXAPAY_PAYMENT_RETURN_URL: "https://bcwin.club"
+  OXAPAY_TEST_MODE:
+  INOUT_OPERATOR_ID: "6331439b-c65a-4b0f-a0ac-491db0fc2ea2"
+  INOUT_SECRET_KEY: "85749EF45F316CB9ED9EB8F1A24AB8B9A3D3A46D26B60C8FB815A0A87508E81582409F22584CE38A8615CF10552683F2EB22D08C9257351E51224C79D8B4055A"
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Generate Production Env File
+        run: |
+          cat <<EOF > .env.docker.prod
+          NODE_ENV=production
+          JWT_SECRET="${{ env.JWT_SECRET }}"
+          DOMAIN="${{ env.DOMAIN }}"
+          API_PORT=${{ env.API_PORT }}
+          ENGINE_PORT=${{ env.ENGINE_PORT }}
+          DATABASE_URL="${{ env.DATABASE_URL }}"
+          REDIS_URL="${{ env.REDIS_URL }}"
+          LAAFIC_APPID="${{ env.LAAFIC_APPID }}"
+          LAAFFIC_APIKEY="${{ env.LAAFFIC_APIKEY }}"
+          LAAFFIC_API_SECRET="${{ env.LAAFFIC_API_SECRET }}"
+          CXPAY_PAYMENT_NOTIFICATION_URL="${{ env.CXPAY_PAYMENT_NOTIFICATION_URL }}"
+          CXPAY_PAYMENT_RETURN_URL="${{ env.CXPAY_PAYMENT_RETURN_URL }}"
+          CXPAY_WITHDRAW_NOTIFICATION_URL="${{ env.CXPAY_WITHDRAW_NOTIFICATION_URL }}"
+          CXPAY_WITHDRAW_PAY_CODE="${{ env.CXPAY_WITHDRAW_PAY_CODE }}"
+          CXPAY_MERCHANT_KEY="${{ env.CXPAY_MERCHANT_KEY }}"
+          CXPAY_MERCHANT_ID="${{ env.CXPAY_MERCHANT_ID }}"
+          CXPAY_TEST_PAY_CODE="${{ env.CXPAY_TEST_PAY_CODE }}"
+          CXPAY_PAYMENT_PAY_CODE="${{ env.CXPAY_PAYMENT_PAY_CODE }}"
+          CXPAY_TEST_MODE=${{ env.CXPAY_TEST_MODE }}
+          XDPAY_PAYMENT_NOTIFICATION_URL="${{ env.XDPAY_PAYMENT_NOTIFICATION_URL }}"
+          XDPAY_WITHDRAW_NOTIFICATION_URL="${{ env.XDPAY_WITHDRAW_NOTIFICATION_URL }}"
+          XDPAY_MERCHANT_ID="${{ env.XDPAY_MERCHANT_ID }}"
+          XDPAY_MERCHANT_KEY="${{ env.XDPAY_MERCHANT_KEY }}"
+          XDPAY_TEST_MODE=${{ env.XDPAY_TEST_MODE }}
+          OXAPAY_MERCHANT_API_KEY="${{ env.OXAPAY_MERCHANT_API_KEY }}"
+          OXAPAY_PAYOUT_API_KEY="${{ env.OXAPAY_PAYOUT_API_KEY }}"
+          OXAPAY_PAYMENT_NOTIFICATION_URL="${{ env.OXAPAY_PAYMENT_NOTIFICATION_URL }}"
+          OXAPAY_WITHDRAW_NOTIFICATION_URL="${{ env.OXAPAY_WITHDRAW_NOTIFICATION_URL }}"
+          OXAPAY_PAYMENT_RETURN_URL="${{ env.OXAPAY_PAYMENT_RETURN_URL }}"
+          OXAPAY_TEST_MODE=${{ env.OXAPAY_TEST_MODE }}
+          INOUT_OPERATOR_ID="${{ env.INOUT_OPERATOR_ID }}"
+          INOUT_SECRET_KEY="${{ env.INOUT_SECRET_KEY }}"
+          MAILEROO_API_KEY="${{ env.MAILEROO_API_KEY }}"
+          MAILEROO_FROM_EMAIL="${{ env.MAILEROO_FROM_EMAIL }}"
+          MAILEROO_SMTP_PASS="${{ env.MAILEROO_SMTP_PASS }}"
+          EOF
+
+      - name: Copy to Deployment Path
+        run: |
+          mkdir -p /root/bcwin/backend
+          rsync -avz --exclude '.git' --exclude 'node_modules' ./ /root/bcwin/backend/
+
+      - name: Deploy Backend Services
+        run: |
+          cd /root/bcwin/backend
+          
+          # 1. Build the new container images
+          docker compose build api engine
+          
+          # 2. Ensure the database service is running and healthy
+          docker compose up -d db
+          
+          # 3. Run migrations against the database using the new image
+          docker compose run --rm api bun run prisma:migrate:deploy
+          
+          # 4. Recreate and start the api and engine containers using the new images
+          docker compose up -d --no-build api engine

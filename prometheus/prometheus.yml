@@ -1,0 +1,23 @@
+# prometheus/prometheus.yml
+
+global:
+  # How frequently to scrape targets by default.
+  scrape_interval: 15s
+  # How frequently to evaluate rules.
+  evaluation_interval: 15s
+
+# A list of scrape configurations.
+scrape_configs:
+  # Job 1: Scrape the bcwin API itself
+  - job_name: "bcwin-api"
+    # This is the address of your application container.
+    # Docker Compose provides DNS, so we can use the service name ('api')
+    # and the port it exposes inside the Docker network.
+    metrics_path: /api/v1/metrics
+    static_configs:
+      - targets: ["api:3000"]
+
+  # Job 2: Scrape Prometheus itself (useful for monitoring its health)
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

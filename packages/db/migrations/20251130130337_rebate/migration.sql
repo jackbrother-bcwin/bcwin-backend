@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "Config" ADD COLUMN     "rebatePercent" DOUBLE PRECISION NOT NULL DEFAULT 0.5;

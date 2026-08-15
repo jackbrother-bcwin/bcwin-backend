@@ -1,0 +1,42 @@
+name: bcwin-dev
+services:
+  db:
+    image: postgres:18.1-alpine
+    container_name: bcwin-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: root
+      POSTGRES_DB: bcwin
+    volumes:
+      - db_data:/var/lib/postgresql
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U root -d bcwin"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: redis:8.4-alpine
+    container_name: bcwin-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 3s
+
+volumes:
+  db_data:
+
+networks:
+  app-network:
+    driver: bridge

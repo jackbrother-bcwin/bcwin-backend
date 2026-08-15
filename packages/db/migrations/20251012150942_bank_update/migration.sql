@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "public"."Bank" ADD COLUMN     "upiId" TEXT,
+ALTER COLUMN "fullName" DROP NOT NULL,
+ALTER COLUMN "bankAccount" DROP NOT NULL,
+ALTER COLUMN "ifsc" DROP NOT NULL;

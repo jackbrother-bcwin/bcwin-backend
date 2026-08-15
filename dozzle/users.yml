@@ -1,0 +1,9 @@
+users:
+  # "bcwin" here is username
+  bcwin:
+    name: bcwin
+    # Generate with docker run -it --rm amir20/dozzle generate admin --password password --email me@email.net --name "Admin"
+    password: $2a$11$UpuidDa5i7ooWGiqC16hp.wtdqURZ2EINSDpVJEdfFxa2N3inJHzC
+    email:
+    filter:
+    roles:

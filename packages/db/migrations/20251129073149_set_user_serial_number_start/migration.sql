@@ -1,0 +1,1 @@
+ALTER SEQUENCE "User_serialNumber_seq" RESTART WITH 8400;
