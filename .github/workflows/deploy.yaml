@@ -10,7 +10,7 @@ env:
   DOMAIN: "bcwin.club"
   API_PORT: 3000
   ENGINE_PORT: 3001
-  DATABASE_URL: "postgresql://neondb_owner:npg_8c4nfgkJvzDy@ep-soft-wind-aznbgheb.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
+  DATABASE_URL: "postgresql://neondb_owner:npg_8c4nfgkJvzDy@ep-soft-wind-aznbgheb.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=verifyfull&channel_binding=require"
   REDIS_URL: "redis://redis:6379"
   LAAFIC_APPID: "BXAvN12j"
   LAAFFIC_APIKEY: "uHdcltl7"
