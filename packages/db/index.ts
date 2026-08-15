@@ -8,6 +8,7 @@ const globalForPrisma = globalThis as unknown as {
 const adapter = new PrismaPg({
     connectionString: process.env.DATABASE_URL,
     min: 2,
+    max: 5,
 });
 const isProduction = process.env.NODE_ENV === "production";
 

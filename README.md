@@ -32,7 +32,7 @@ visit http://localhost:3000/studio to access web api documentation
 
 To keep things simple when running everything (frontend and backend) on single vps, just use pm2 for deployment and setup reverse proxy such as nginx on host level. But if there are multiple servers, use one server just for backend and use docker compose for deployment. ***further traefik (reverse proxy) configuration will be needed in docker compose file for this approach***
 
-**Always migrate before serving traffic.** Docker `ENTRYPOINT` runs `scripts/entrypoint.sh` (`prisma migrate deploy`). PM2 API app uses `bun run start:api` (migrate then API).
+**Migrate once per deploy, not on every process start.** CI runs `prisma migrate deploy` against Neon before recreating API/Engine. Local Docker Postgres (`docker-compose.dev.yaml`) is unchanged.
 
 ### Test-prod DB reset (DESTROYS ALL DATA)
 

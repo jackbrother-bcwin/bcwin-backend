@@ -13,10 +13,6 @@ COPY . .
 
 RUN DATABASE_URL=postgresql://root:root@db:5432/bcwin bunx prisma generate --schema=packages/db/schema.prisma
 
-RUN chmod +x scripts/entrypoint.sh
-
 EXPOSE 3000
 
-# Migrate then start — prevents schema drift (works-local/fails-prod)
-ENTRYPOINT ["./scripts/entrypoint.sh"]
 CMD [ "bun", "run", "apps/api/src/index.ts" ]

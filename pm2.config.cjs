@@ -2,7 +2,6 @@ module.exports = {
     apps: [
         {
             name: "web-api",
-            // migrate deploy then API (see package.json start:api)
             script: "bun",
             args: "run start:api",
             exec_mode: "fork",   // ⚠️ no cluster
@@ -16,7 +15,6 @@ module.exports = {
         },
         {
             name: "engine-api",
-            // API process runs migrate; engine just starts
             script: "bun",
             args: "run start:engine",
             exec_mode: "fork",

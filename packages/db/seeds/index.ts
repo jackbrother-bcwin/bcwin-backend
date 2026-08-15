@@ -6,7 +6,6 @@ import { seedVipRequirements } from "./vipRequirements";
 import { seedRebateRates } from "./rebateRates";
 import { seedLuckySpin } from "./luckySpin";
 import { seedSelfRebateRates } from "./selfRebateRates";
-import { seedWithdrawals } from "./withdrawals";
 
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
 const prisma = new PrismaClient({ adapter });
@@ -28,9 +27,6 @@ async function main() {
         await seedLuckySpin(prisma);
 
         await seedSelfRebateRates(prisma);
-
-        // Withdrawal history across all statuses
-        await seedWithdrawals(prisma);
 
         console.log("🎉 All seeds completed successfully!");
     } catch (error) {

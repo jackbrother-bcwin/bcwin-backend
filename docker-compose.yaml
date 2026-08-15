@@ -54,26 +54,6 @@ services:
       - app-network
     restart: unless-stopped
 
-  adminer:
-    container_name: bcwin-adminer
-    image: adminer:latest
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.adminer.entrypoints=websecure"
-      - "traefik.http.routers.adminer.rule=Host(`adminer.bcwin.club`)"
-      - "traefik.http.routers.adminer.tls=true"
-      - "traefik.http.routers.adminer.tls.certresolver=letsencrypt"
-      - "traefik.http.services.adminer.loadbalancer.server.port=8080"
-      # Basic Auth (user: bcwin, pass: bcwin). 
-      # To generate a new hash: run `openssl passwd -apr1 <password>` and escape all "$" signs as "$$"
-      - "traefik.http.routers.adminer.middlewares=adminer-auth"
-      - "traefik.http.middlewares.adminer-auth.basicauth.users=bcwin:$$apr1$$9OYc4Y2Z$$qGyKUM1sNJgKtupoJCL/U1"
-    depends_on:
-      - db
-    networks:
-      - app-network
-    restart: unless-stopped
-
   api:
     build: .
     env_file:
@@ -90,8 +70,6 @@ services:
       - "traefik.http.services.api.loadbalancer.server.port=3000"
       - "traefik.http.services.api.loadbalancer.sticky.cookie=true"
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_started
     networks:
@@ -109,30 +87,10 @@ services:
     env_file:
       - .env.docker.prod
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_started
     networks:
       - app-network
-    restart: unless-stopped
-
-  db:
-    image: postgres:18.1-alpine
-    container_name: bcwin-db
-    environment:
-      POSTGRES_USER: root
-      POSTGRES_PASSWORD: root
-      POSTGRES_DB: bcwin
-    volumes:
-      - db_data:/var/lib/postgresql
-    networks:
-      - app-network
-    healthcheck:
-      test: [ "CMD-SHELL", "pg_isready -U root -d bcwin" ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
     restart: unless-stopped
 
   redis:
@@ -159,7 +117,6 @@ services:
     restart: unless-stopped
 
 volumes:
-  db_data:
   letsencrypt_data:
 
 networks:

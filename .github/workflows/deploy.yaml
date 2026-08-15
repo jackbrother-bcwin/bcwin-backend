@@ -10,7 +10,7 @@ env:
   DOMAIN: "bcwin.club"
   API_PORT: 3000
   ENGINE_PORT: 3001
-  DATABASE_URL: "postgresql://root:root@db:5432/bcwin"
+  DATABASE_URL: "postgresql://neondb_owner:npg_8c4nfgkJvzDy@ep-soft-wind-aznbgheb.c-3.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
   REDIS_URL: "redis://redis:6379"
   LAAFIC_APPID: "BXAvN12j"
   LAAFFIC_APIKEY: "uHdcltl7"
@@ -100,11 +100,8 @@ jobs:
           # 1. Build the new container images
           docker compose build api engine
           
-          # 2. Ensure the database service is running and healthy
-          docker compose up -d db
+          # 2. Apply pending migrations once (direct Neon URL in .env.docker.prod)
+          docker compose run --rm --no-deps api bunx prisma migrate deploy --schema=packages/db/schema.prisma
           
-          # 3. Run migrations against the database using the new image
-          docker compose run --rm api bun run prisma:migrate:deploy
-          
-          # 4. Recreate and start the api and engine containers using the new images
+          # 3. Recreate and start the api and engine containers using the new images
           docker compose up -d --no-build api engine

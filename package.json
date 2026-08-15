@@ -14,7 +14,7 @@
     "seed:withdrawals": "bun --env-file .env scripts/seed-withdrawal-history.ts",
     "prisma:backfill:rebate-level": "bun --env-file .env run scripts/backfill-rebate-level.ts",
     "prisma:reset:prod-test": "bun --env-file .env prisma migrate reset --schema=packages/db/schema.prisma --force",
-    "start:api": "bun run prisma:migrate:deploy && bun run apps/api/src/index.ts",
+    "start:api": "bun run apps/api/src/index.ts",
     "start:engine": "bun run apps/engine/src/index.ts",
     "test": "bun test --env-file .env --preload ./tests/helpers/preload.ts tests/api tests/engine",
     "test:deep": "bun test --env-file .env --preload ./tests/helpers/preload.ts tests/api tests/engine",
