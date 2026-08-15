@@ -377,7 +377,7 @@ export const authRoutes = (app: OpenAPIHono) => {
             if (!user) {
                 return apiError(
                     c,
-                    "Invalid credentials",
+                    "Wrong account or password",
                     HTTP_STATUS.UNAUTHORIZED
                 );
             }
@@ -440,7 +440,7 @@ export const authRoutes = (app: OpenAPIHono) => {
             ) {
                 return apiError(
                     c,
-                    "Invalid credentials",
+                    "Wrong account or password",
                     HTTP_STATUS.UNAUTHORIZED
                 );
             }
@@ -701,7 +701,7 @@ export const authRoutes = (app: OpenAPIHono) => {
             if (!user) {
                 return apiError(
                     c,
-                    "User not found with this mobile number",
+                    "User does not exist",
                     HTTP_STATUS.BAD_REQUEST
                 );
             }

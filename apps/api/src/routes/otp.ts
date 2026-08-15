@@ -24,6 +24,11 @@ const otpQuerySchema = z
             description: "Email address when method is 'email'",
             example: "user@example.com",
         }),
+        purpose: z.enum(["register", "reset"]).optional().openapi({
+            description:
+                "register = new account OTP. reset = forgot password (user must already exist).",
+            example: "reset",
+        }),
     })
     .superRefine((val, ctx) => {
         if (val.method === "mobileNumber") {
@@ -104,6 +109,20 @@ export const otpRoutes = (app: OpenAPIHono) => {
             if (query.method === "email" && query.email) {
                 const targetEmail = query.email.trim().toLowerCase();
 
+                if (query.purpose === "reset") {
+                    const existing = await prisma.user.findUnique({
+                        where: { email: targetEmail },
+                        select: { id: true },
+                    });
+                    if (!existing) {
+                        return apiError(
+                            c,
+                            "User does not exist",
+                            HTTP_STATUS.BAD_REQUEST
+                        );
+                    }
+                }
+
                 const otpData = await prisma.otp.findFirst({
                     where: {
                         email: targetEmail,
@@ -145,6 +164,26 @@ export const otpRoutes = (app: OpenAPIHono) => {
             } else {
                 const { countryCode, mobileNumber: mob } = query;
                 const e164 = buildE164(countryCode, mob!);
+
+                if (query.purpose === "reset") {
+                    let existing = await prisma.user.findUnique({
+                        where: { mobileNumber: e164 },
+                        select: { id: true },
+                    });
+                    if (!existing && countryCode === "91") {
+                        existing = await prisma.user.findUnique({
+                            where: { mobileNumber: mob! },
+                            select: { id: true },
+                        });
+                    }
+                    if (!existing) {
+                        return apiError(
+                            c,
+                            "User does not exist",
+                            HTTP_STATUS.BAD_REQUEST
+                        );
+                    }
+                }
 
                 // Rate-limit by full international number
                 const otpData = await prisma.otp.findFirst({
