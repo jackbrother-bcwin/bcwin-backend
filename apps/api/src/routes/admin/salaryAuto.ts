@@ -90,7 +90,7 @@ const listSlabsRoute = createRoute({
     tags: ["admin"],
     summary: "List automatic salary slabs",
     description:
-        "Highest fully-met slab is paid. Direct invites + active members (bet ≥ ₹150 in last 24h) + one-day team deposit. Demo accounts never count.",
+        "Highest fully-met slab is paid. Need that many active L1s (bet ≥ ₹150 / 24h) plus extra actives from L1–L6 (direct + listed active), and one-day team deposit. Demo accounts never count.",
     request: { cookies: authCookie },
     responses: {
         200: {

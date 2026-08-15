@@ -147,8 +147,8 @@ async function main() {
     console.log("  L2 count", l2Ids.length);
 
     // ── SUCCESS deposits now (counts as today's IST team deposit) ─
-    // Target ≥ ₹30,000 for slab ₹1,200 (6 direct · 12 active · 30k)
-    // 6 L1 + 9 L2 = 15 users with deposits → active ≥ 12 ✓
+    // Target ≥ ₹30,000 team deposit (₹1,200 row). Active now = lottery bet ≥₹150,
+    // not deposit: 4 active L1 + 18 total actives required. Add bets before Generate.
     const depositors = [...directs.map((d) => d.id), ...l2Ids];
     const targetTotal = 30_000;
     const base = Math.floor(targetTotal / depositors.length);
@@ -184,7 +184,9 @@ async function main() {
     console.log("Direct non-demo:", directCount, "(demo directs:", demoDirect + ")");
     console.log("Active (approx):", depositors.length, "users with SUCCESS deposit");
     console.log("Team deposit today (approx): ₹", totalDep);
-    console.log("Expected highest slab: ₹1,200 (6 direct · 12 active · ₹30,000)");
+    console.log(
+        "Expected ₹1,200 only if 4+ L1 and 18+ team members each bet ≥₹150 in 24h, plus ₹30k deposit."
+    );
     console.log("Seed user password:", PASSWORD_PLAIN);
     console.log("Seed username prefix:", PREFIX);
     console.log("\nNext: Admin → Salary → Auto slabs → pick today → Generate → Approve");

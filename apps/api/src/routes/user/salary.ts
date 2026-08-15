@@ -13,6 +13,8 @@ import {
     formatIstYmd,
     getIstDayRange,
     matchHighestSlab,
+    slabMet,
+    slabRequiredActive,
     type SalaryMetrics,
 } from "@/lib/autoSalaryService";
 import { TeamMetricsCalculator } from "@/lib/teamMetricsCalculator";
@@ -254,8 +256,11 @@ async function buildEligibility(userId: string, metrics: SalaryMetrics) {
         metrics.teamDeposit > 0 ||
         metrics.directCount > 0 ||
         metrics.activeCount > 0;
-    const activeNeed = 3;
-    const activeOk = metrics.activeCount >= activeNeed;
+    const first = AUTO_SALARY_SLABS[0]!;
+    const activeNeed = slabRequiredActive(first);
+    const activeOk =
+        metrics.directCount >= first.direct &&
+        metrics.activeCount >= activeNeed;
 
     return [
         {
@@ -276,7 +281,7 @@ async function buildEligibility(userId: string, metrics: SalaryMetrics) {
             id: "active_members",
             title: "Active members (direct/indirect)",
             ok: activeOk,
-            detail: `${metrics.activeCount} active members (bet ≥₹150 in last 24h — need ≥${activeNeed}).`,
+            detail: `${metrics.activeCount} active (need ≥${activeNeed} total, ≥${first.direct} active L1). Bet ≥₹150 in last 24h.`,
         },
         {
             id: "shared_ip",
@@ -307,16 +312,17 @@ function howtoSteps(metrics: SalaryMetrics) {
         const n = first.direct - metrics.directCount;
         steps.push({
             id: "direct",
-            title: `Refer ${n} more direct member${n > 1 ? "s" : ""}`,
-            body: `Invite ${n} more people with your referral code — they join directly under you (Level 1).`,
+            title: `Get ${n} more active direct${n > 1 ? "s" : ""}`,
+            body: `${n} more Level-1 member${n > 1 ? "s" : ""} must bet at least ₹150 in the last 24 hours. Empty invites do not count.`,
         });
     }
-    if (metrics.activeCount < first.active) {
-        const n = first.active - metrics.activeCount;
+    const firstActiveNeed = slabRequiredActive(first);
+    if (metrics.activeCount < firstActiveNeed) {
+        const n = firstActiveNeed - metrics.activeCount;
         steps.push({
             id: "active",
             title: `Get ${n} more active member${n > 1 ? "s" : ""}`,
-            body: `${n} more of your team must bet at least ₹150 in the last 24 hours (WinGo / TRX / K3 / 5D / Moto combined). Demo accounts do not count.`,
+            body: `Need ${firstActiveNeed} actives in total (≥${first.direct} L1). Extra can be more directs or L2–L6. Each must bet ≥₹150 in 24h (WinGo / TRX / K3 / 5D / Moto). Demo accounts do not count.`,
         });
     }
     if (metrics.teamDeposit < first.teamDeposit) {
@@ -335,7 +341,7 @@ function howtoSteps(metrics: SalaryMetrics) {
             steps.push({
                 id: "next_slab",
                 title: `Next level ₹${next.reward.toLocaleString("en-IN")}/day`,
-                body: `Need ${Math.max(0, next.direct - metrics.directCount)} more direct, ${Math.max(0, next.active - metrics.activeCount)} more active, ₹${Math.max(0, next.teamDeposit - metrics.teamDeposit).toLocaleString("en-IN")} more team deposit today.`,
+                body: `Need ${Math.max(0, next.direct - metrics.directCount)} more active L1, ${Math.max(0, slabRequiredActive(next) - metrics.activeCount)} more active in the team, ₹${Math.max(0, next.teamDeposit - metrics.teamDeposit).toLocaleString("en-IN")} more team deposit today.`,
             });
         } else {
             steps.push({
@@ -456,10 +462,7 @@ export const userSalaryRoutes = (app: OpenAPIHono) => {
                 direct: s.direct,
                 active: s.active,
                 teamDeposit: s.teamDeposit,
-                unlocked:
-                    todayM.directCount >= s.direct &&
-                    todayM.activeCount >= s.active &&
-                    todayM.teamDeposit >= s.teamDeposit,
+                unlocked: slabMet(todayM, s),
             }));
 
             const nextSlab =
@@ -522,7 +525,7 @@ export const userSalaryRoutes = (app: OpenAPIHono) => {
                           ),
                           activeNeed: Math.max(
                               0,
-                              nextSlab.active - todayM.activeCount
+                              slabRequiredActive(nextSlab) - todayM.activeCount
                           ),
                           depositNeed: Math.max(
                               0,

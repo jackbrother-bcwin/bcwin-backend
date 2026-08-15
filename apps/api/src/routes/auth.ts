@@ -621,8 +621,8 @@ export const authRoutes = (app: OpenAPIHono) => {
             const serialNumber = await generateNextSerialNumber();
             const referralCode = createReferralCode(serialNumber);
 
-            // Signup bonus ₹50 for phone registration only — email register gets ₹0
-            const signupBonus = targetEmail ? 0 : 50;
+            // Signup bonus ₹30 for phone registration only — email register gets ₹0
+            const signupBonus = targetEmail ? 0 : 30;
 
             const user = await prisma.user.create({
                 data: {

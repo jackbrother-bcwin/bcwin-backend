@@ -20,22 +20,42 @@ export type AutoSalarySlab = {
 /**
  * Ordered lowest → highest; matching uses reverse scan for highest fully met.
  * Rule: Highest Slab Fully Met Is Paid (INR).
- * Fields map to: directTeam · activeTeam · deposit (team) · salary (reward).
+ *
+ * `direct` = min **active L1** (bet ≥ ₹150 / 24h).
+ * `active` = extra actives from the rest of the team (L1–L6, including more L1s).
+ * Qualify when activeL1 ≥ direct AND totalActive ≥ direct + active
+ * (e.g. ₹300: 2 active L1 + 3 more anywhere = 5 total, or all 5 as L1).
  */
 export const AUTO_SALARY_SLABS: readonly AutoSalarySlab[] = [
     { reward: 300, direct: 2, active: 3, teamDeposit: 6_000 },
     { reward: 500, direct: 3, active: 6, teamDeposit: 10_000 },
-    { reward: 800, direct: 5, active: 8, teamDeposit: 18_000 },
-    { reward: 1_200, direct: 6, active: 12, teamDeposit: 30_000 },
-    { reward: 2_000, direct: 7, active: 20, teamDeposit: 50_000 },
-    { reward: 3_000, direct: 8, active: 50, teamDeposit: 80_000 },
-    { reward: 4_500, direct: 10, active: 80, teamDeposit: 150_000 },
-    { reward: 6_000, direct: 10, active: 120, teamDeposit: 200_000 },
-    { reward: 10_000, direct: 12, active: 200, teamDeposit: 400_000 },
-    { reward: 20_000, direct: 12, active: 400, teamDeposit: 1_000_000 },
-    { reward: 50_000, direct: 15, active: 750, teamDeposit: 1_800_000 },
-    { reward: 100_000, direct: 15, active: 1_500, teamDeposit: 3_000_000 },
+    { reward: 800, direct: 3, active: 10, teamDeposit: 18_000 },
+    { reward: 1_200, direct: 4, active: 14, teamDeposit: 30_000 },
+    { reward: 2_000, direct: 5, active: 22, teamDeposit: 50_000 },
+    { reward: 3_000, direct: 6, active: 52, teamDeposit: 80_000 },
+    { reward: 4_500, direct: 6, active: 84, teamDeposit: 150_000 },
+    { reward: 6_000, direct: 6, active: 124, teamDeposit: 200_000 },
+    { reward: 10_000, direct: 6, active: 206, teamDeposit: 400_000 },
+    { reward: 20_000, direct: 6, active: 406, teamDeposit: 1_000_000 },
+    { reward: 50_000, direct: 6, active: 759, teamDeposit: 1_800_000 },
+    { reward: 100_000, direct: 6, active: 1_509, teamDeposit: 3_000_000 },
 ] as const;
+
+/** Total actives required (active L1 floor + extra from team). */
+export function slabRequiredActive(slab: AutoSalarySlab): number {
+    return slab.direct + slab.active;
+}
+
+export function slabMet(
+    metrics: SalaryMetrics,
+    slab: AutoSalarySlab
+): boolean {
+    return (
+        metrics.directCount >= slab.direct &&
+        metrics.activeCount >= slabRequiredActive(slab) &&
+        metrics.teamDeposit >= slab.teamDeposit
+    );
+}
 
 export type SalaryMetrics = {
     directCount: number;
@@ -86,11 +106,7 @@ export function formatIstYmd(d: Date): string {
 export function matchHighestSlab(metrics: SalaryMetrics): SlabMatch | null {
     for (let i = AUTO_SALARY_SLABS.length - 1; i >= 0; i--) {
         const slab = AUTO_SALARY_SLABS[i]!;
-        if (
-            metrics.directCount >= slab.direct &&
-            metrics.activeCount >= slab.active &&
-            metrics.teamDeposit >= slab.teamDeposit
-        ) {
+        if (slabMet(metrics, slab)) {
             return { amount: slab.reward, slabIndex: i, slab };
         }
     }
@@ -107,15 +123,16 @@ export const ACTIVE_MEMBER_MIN_BET = 150;
 export const ACTIVE_MEMBER_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Count non-demo team members whose total bet volume (all lottery games)
+ * Non-demo team members whose total lottery bet volume
  * in [windowStart, windowEnd] is ≥ ACTIVE_MEMBER_MIN_BET.
  */
-async function countActiveMembersByBet(
+async function activeMemberIdsByBet(
     teamUserIds: string[],
     windowStart: Date,
     windowEnd: Date
-): Promise<number> {
-    if (teamUserIds.length === 0) return 0;
+): Promise<Set<string>> {
+    const ids = new Set<string>();
+    if (teamUserIds.length === 0) return ids;
 
     const betWhere = {
         userId: { in: teamUserIds },
@@ -168,17 +185,17 @@ async function countActiveMembersByBet(
     add(moto);
     add(trx);
 
-    let count = 0;
-    for (const sum of totals.values()) {
-        if (sum >= ACTIVE_MEMBER_MIN_BET) count += 1;
+    for (const [userId, sum] of totals) {
+        if (sum >= ACTIVE_MEMBER_MIN_BET) ids.add(userId);
     }
-    return count;
+    return ids;
 }
 
 /**
- * Direct = L1 non-demo invites.
- * Active = L1–L6 non-demo downline who bet ≥ ₹150 total in the last 24 hours
- *          (as-of dayEnd, or now if day is still open).
+ * Direct = L1 non-demo who are **active** (bet ≥ ₹150 in the 24h window).
+ * Active = L1–L6 non-demo downline who bet ≥ ₹150 in that window
+ *          (as-of dayEnd, or now if day is still open). Extra actives may
+ *          be more L1s or L2–L6.
  * Team deposit = all-level non-demo downline SUCCESS deposits on the IST day.
  * Demo accounts in downline are never included.
  */
@@ -205,8 +222,8 @@ export async function computeUserSalaryMetrics(
         activeEnd.getTime() - ACTIVE_MEMBER_WINDOW_MS
     );
 
-    const [activeCount, teamDepositAgg] = await Promise.all([
-        countActiveMembersByBet(allIds, activeStart, activeEnd),
+    const [activeIds, teamDepositAgg] = await Promise.all([
+        activeMemberIdsByBet(allIds, activeStart, activeEnd),
         prisma.deposit.aggregate({
             where: {
                 userId: { in: allIds },
@@ -219,8 +236,8 @@ export async function computeUserSalaryMetrics(
     ]);
 
     return {
-        directCount: directIds.length,
-        activeCount,
+        directCount: directIds.filter((id) => activeIds.has(id)).length,
+        activeCount: activeIds.size,
         teamDeposit: teamDepositAgg._sum.amount || 0,
     };
 }
