@@ -5,6 +5,7 @@ import { apiError, CommonResponses } from "@/lib/utils";
 import Inout from "@/lib/vendor/inout";
 import { HTTP_STATUS } from "@/lib/http";
 import { authCookie } from "@/schemas";
+import { Cache, CacheKey } from "@bcwin/cache";
 import Logger from "@bcwin/logger";
 
 const logger = new Logger("admin-update-inout-games");
@@ -44,6 +45,7 @@ export const updateInoutGamesRoutes = (app: OpenAPIHono) => {
     app.openapi(updateInoutGamesRoute, async (c) => {
         try {
             await Inout.getGames();
+            await Cache.del(CacheKey.inoutGames);
 
             return c.json(
                 {
