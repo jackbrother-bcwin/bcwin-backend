@@ -69,6 +69,10 @@ const WithdrawItemSchema = z.object({
             description: "User mobile number",
             example: "9876543210",
         }),
+        email: z.string().nullable().optional().openapi({
+            description: "User email if bound",
+            example: "user@example.com",
+        }),
     }),
     bank: z
         .object({
@@ -211,7 +215,7 @@ export const withdrawRoutes = (app: OpenAPIHono) => {
 
             // Check cache using hash-based caching
             const mainCacheKey = CacheKey.adminWithdrawals;
-            const fieldKey = `status:${status || "all"}-userId:${userId || "all"
+            const fieldKey = `v2-status:${status || "all"}-userId:${userId || "all"
                 }-method:${method || "all"}-page:${page}-limit:${limit}`;
 
             const cachedData = await Cache.hget<{
@@ -226,6 +230,7 @@ export const withdrawRoutes = (app: OpenAPIHono) => {
                         serialNumber: number;
                         username: string;
                         mobileNumber: string;
+                        email?: string | null;
                     };
                     bank: {
                         fullName: string;
@@ -276,6 +281,7 @@ export const withdrawRoutes = (app: OpenAPIHono) => {
                                 serialNumber: true,
                                 username: true,
                                 mobileNumber: true,
+                                email: true,
                                 bank: {
                                     select: {
                                         fullName: true,
@@ -304,6 +310,7 @@ export const withdrawRoutes = (app: OpenAPIHono) => {
                         serialNumber: withdrawal.user.serialNumber,
                         username: withdrawal.user.username,
                         mobileNumber: withdrawal.user.mobileNumber,
+                        email: withdrawal.user.email ?? null,
                     },
                     bank: withdrawal.user.bank,
                     createdAt: withdrawal.createdAt.toISOString(),
