@@ -89,7 +89,10 @@ export const authMiddleware = async (c: Context, next: Next) => {
 
         await next();
     } catch (error) {
-        logger.error(error);
+        if (error instanceof Error && !error.message.includes("Invalid token")) {
+            logger.error(error);
+        }
+
         const { message, status } = authCatchResponse(error);
         return middlewareApiError(c, message, status);
     }
