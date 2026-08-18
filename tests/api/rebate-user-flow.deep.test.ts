@@ -412,7 +412,7 @@ describe("Deep E2E: rebate user flow (place bet → endpoints → schedulers)", 
             expect(res.status).toBe(200);
             expect(res.json?.success).toBe(true);
             if (res.json?.data) {
-                expect(String(res.json.data.settlementTime)).toContain("01:30");
+                expect(String(res.json.data.settlementTime)).toContain("24:00");
                 expect(typeof res.json.data.totalCommission).toBe("number");
                 expect(res.json.data.totalCommission).toBeGreaterThan(0);
                 expect(Array.isArray(res.json.data.categories)).toBe(true);

@@ -91,7 +91,7 @@ describe("Deep: FE rebate API surfaces (agency + history)", () => {
         expect(res.status).toBe(200);
         expect(res.json?.success).toBe(true);
         if (res.json?.data) {
-            expect(res.json.data.settlementTime).toContain("01:30");
+            expect(res.json.data.settlementTime).toContain("24:00");
             expect(typeof res.json.data.totalCommission).toBe("number");
             expect(Array.isArray(res.json.data.categories)).toBe(true);
         }

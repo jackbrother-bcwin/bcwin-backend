@@ -66,7 +66,7 @@ const getRebateDailyRoute = createRoute({
     path: "/daily",
     summary: "One-day team rebate settlement summary",
     description:
-        "Aggregated rebate for a calendar day (IST): totals + per-category L1–L6 breakdown for Commission Details UI",
+        "Aggregated rebate for an IST calendar day (00:00–24:00): totals + per-category L1–L6 breakdown",
     request: {
         cookies: authCookie,
         query: z.object({
@@ -97,21 +97,9 @@ function endExclusiveIst(ymd: string): Date {
     return new Date(parseYmdStart(ymd).getTime() + 24 * 60 * 60 * 1000);
 }
 
-/** Display clock for when that IST day's rebates are credited (next calendar day 01:30 IST). */
-function nextDaySettlementTime(ymd: string): string {
-    try {
-        const [ys, ms, ds] = ymd.split("-").map(Number);
-        if (ys && ms && ds) {
-            const d = new Date(ys, ms - 1, ds + 1);
-            const y = d.getFullYear();
-            const m = String(d.getMonth() + 1).padStart(2, "0");
-            const day = String(d.getDate()).padStart(2, "0");
-            return `${y}-${m}-${day} 01:30:00`;
-        }
-    } catch {
-        /* fallthrough */
-    }
-    return `${ymd} 01:30:00`;
+/** Player-facing close of that IST day (00:00–24:00). Wallet cron is still next morning. */
+function dayEndSettlementTime(ymd: string): string {
+    return `${ymd} 24:00:00`;
 }
 
 function categoryTitle(cat: RebateGameCategory): string {
@@ -208,7 +196,7 @@ export const rebateDailyRoutes = (app: OpenAPIHono) => {
                         success: true,
                         data: {
                             date,
-                            settlementTime: nextDaySettlementTime(date),
+                            settlementTime: dayEndSettlementTime(date),
                             settled: false,
                             hasData: false,
                             bettorCount: 0,
@@ -352,7 +340,7 @@ export const rebateDailyRoutes = (app: OpenAPIHono) => {
                     success: true,
                     data: {
                         date,
-                        settlementTime: nextDaySettlementTime(date),
+                        settlementTime: dayEndSettlementTime(date),
                         settled: allSettled,
                         hasData: true,
                         bettorCount: allBettors.size,

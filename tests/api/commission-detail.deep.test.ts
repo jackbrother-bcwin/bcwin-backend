@@ -195,7 +195,7 @@ describe("Commission Detail Page & API Surface Edge Cases", () => {
             expect(d.bettorCount).toBe(0);
             expect(d.totalBetAmount).toBe(0);
             expect(d.totalCommission).toBe(0);
-            expect(d.settlementTime).toContain("01:30:00");
+            expect(d.settlementTime).toContain("24:00:00");
             expect(Array.isArray(d.categories)).toBe(true);
             expect(d.categories.length).toBe(5);
 
