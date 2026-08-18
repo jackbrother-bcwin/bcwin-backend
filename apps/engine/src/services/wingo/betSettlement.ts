@@ -170,10 +170,10 @@ export class BetSettlement {
         try {
             const periodsToSettle = await prisma.wingoPeriod.findMany({
                 where: {
-                    status: "ENDED",
                     resultNumber: { not: null },
                     resultColor: { not: null },
                     resultSize: { not: null },
+                    wingoBets: { some: { status: "PENDING" } },
                 },
                 include: {
                     wingoBets: {
@@ -279,15 +279,14 @@ export class BetSettlement {
                 );
             }
 
-            // Batch update all periods to RESOLVED
-            if (periodsToSettle.length > 0) {
-                const uniquePeriodIds = [
-                    ...new Set(periodsToSettle.map((p) => p.id)),
-                ];
+            // RESOLVED only after the slot has ended — never while the clock is live
+            const now = new Date();
+            const finishedIds = periodsToSettle
+                .filter((p) => p.endTime.getTime() <= now.getTime())
+                .map((p) => p.id);
+            if (finishedIds.length > 0) {
                 await prisma.wingoPeriod.updateMany({
-                    where: {
-                        id: { in: uniquePeriodIds },
-                    },
+                    where: { id: { in: [...new Set(finishedIds)] } },
                     data: { status: "RESOLVED" },
                 });
             }

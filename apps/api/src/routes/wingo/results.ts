@@ -104,8 +104,10 @@ export const resultRoutes = (app: OpenAPIHono) => {
             const { duration, page, limit } = c.req.valid("query");
             const skip = (page - 1) * limit;
 
+            const now = new Date();
             const whereClause = {
-                status: "RESOLVED" as const,
+                resultNumber: { not: null },
+                endTime: { lte: now },
                 ...(duration && { durationSeconds: duration }),
             };
 
@@ -199,10 +201,12 @@ export const resultRoutes = (app: OpenAPIHono) => {
             const user = c.get("user");
             const { periodId } = c.req.valid("param");
 
-            const period = await prisma.wingoPeriod.findUnique({
+            const now = new Date();
+            const period = await prisma.wingoPeriod.findFirst({
                 where: {
                     id: periodId,
-                    status: "RESOLVED",
+                    resultNumber: { not: null },
+                    endTime: { lte: now },
                 },
                 select: {
                     id: true,

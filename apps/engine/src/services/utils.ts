@@ -10,10 +10,11 @@
  * @param durationSeconds - Duration of the period in seconds
  * @returns Period number string (e.g., "202512280001")
  */
-export function generatePeriodNumber(durationSeconds: number): string {
-    const now = new Date();
+export function betLockSeconds(durationSeconds: number): number {
+    return durationSeconds <= 30 ? 5 : 10;
+}
 
-    // Get IST (Asia/Kolkata) timezone date components
+function istParts(at: Date) {
     const istFormatter = new Intl.DateTimeFormat("en-US", {
         timeZone: "Asia/Kolkata",
         year: "numeric",
@@ -24,8 +25,14 @@ export function generatePeriodNumber(durationSeconds: number): string {
         second: "2-digit",
         hour12: false,
     });
+    return istFormatter.formatToParts(at);
+}
 
-    const parts = istFormatter.formatToParts(now);
+export function generatePeriodNumber(
+    durationSeconds: number,
+    at: Date = new Date()
+): string {
+    const parts = istParts(at);
     const year = parts.find((p) => p.type === "year")?.value || "";
     const month = parts.find((p) => p.type === "month")?.value || "";
     const day = parts.find((p) => p.type === "day")?.value || "";
@@ -62,25 +69,14 @@ export function generatePeriodNumber(durationSeconds: number): string {
  * @param durationSeconds - Duration of the period in seconds
  * @returns Object containing startTime and endTime as Date objects
  */
-export function calculatePeriodTimes(durationSeconds: number): {
+export function calculatePeriodTimes(
+    durationSeconds: number,
+    at: Date = new Date()
+): {
     startTime: Date;
     endTime: Date;
 } {
-    const now = new Date();
-
-    // Get IST (Asia/Kolkata) timezone date components
-    const istFormatter = new Intl.DateTimeFormat("en-US", {
-        timeZone: "Asia/Kolkata",
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-        hour12: false,
-    });
-
-    const parts = istFormatter.formatToParts(now);
+    const parts = istParts(at);
     const hour = parseInt(
         parts.find((p) => p.type === "hour")?.value || "0",
         10

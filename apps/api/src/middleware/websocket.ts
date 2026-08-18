@@ -5,6 +5,7 @@ import { getCookie } from "hono/cookie";
 import { HTTP_STATUS } from "../lib/http";
 import { middlewareApiError } from "../lib/utils";
 import { AUTH_COOKIE_NAME, decodeJwt } from "@/lib/auth";
+import { authCatchResponse } from "@/lib/dbError";
 import { prisma } from "@bcwin/db";
 
 const websocketQuerySchema = z.object({
@@ -52,11 +53,8 @@ export const websocketMiddleware = async (c: Context, next: Next) => {
 
         c.set("user", user);
     } catch (error) {
-        return middlewareApiError(
-            c,
-            "Authentication failed",
-            HTTP_STATUS.UNAUTHORIZED
-        );
+        const { message, status } = authCatchResponse(error);
+        return middlewareApiError(c, message, status);
     }
 
     await next();

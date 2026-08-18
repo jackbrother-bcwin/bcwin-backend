@@ -143,7 +143,14 @@ export class ResultGenerator {
         return { number, color, size };
     }
 
-    async processPeriodResult(periodId: string): Promise<PeriodResult | null> {
+    /**
+     * Draw and persist. Does not publish if `now < endTime` (lock-window prepare).
+     * Idempotent: already-stored result is returned unchanged (no redraw).
+     */
+    async processPeriodResult(
+        periodId: string,
+        opts?: { publish?: boolean }
+    ): Promise<PeriodResult | null> {
         try {
             const period = await prisma.wingoPeriod.findUnique({
                 where: { id: periodId },
@@ -154,9 +161,16 @@ export class ResultGenerator {
                 return null;
             }
 
-            if (period.status !== "ENDED") {
-                logger.error(`Period ${periodId} is not in ENDED status`);
-                return null;
+            if (period.resultNumber != null && period.resultColor && period.resultSize) {
+                const stored = {
+                    number: period.resultNumber,
+                    color: period.resultColor,
+                    size: period.resultSize,
+                };
+                if (opts?.publish !== false && Date.now() >= period.endTime.getTime()) {
+                    this.publishResult(period, stored);
+                }
+                return stored;
             }
 
             const result = await this.generateCompleteResult(periodId);
@@ -170,16 +184,12 @@ export class ResultGenerator {
                 },
             });
 
-            WebSocketManager.publishToTopic("wingo-results", {
-                periodId,
-                periodNumber: period.periodNumber,
-                durationSeconds: period.durationSeconds,
-                startTime: period.startTime,
-                endTime: period.endTime,
-                number: result.number,
-                color: result.color,
-                size: result.size,
-            });
+            const publish =
+                opts?.publish !== false &&
+                Date.now() >= period.endTime.getTime();
+            if (publish) {
+                this.publishResult(period, result);
+            }
 
             logger.debug("Generated result", {
                 periodId,
@@ -198,6 +208,28 @@ export class ResultGenerator {
             );
             return null;
         }
+    }
+
+    publishResult(
+        period: {
+            id: string;
+            periodNumber: string;
+            durationSeconds: number;
+            startTime: Date;
+            endTime: Date;
+        },
+        result: PeriodResult
+    ): void {
+        WebSocketManager.publishToTopic("wingo-results", {
+            periodId: period.id,
+            periodNumber: period.periodNumber,
+            durationSeconds: period.durationSeconds,
+            startTime: period.startTime,
+            endTime: period.endTime,
+            number: result.number,
+            color: result.color,
+            size: result.size,
+        });
     }
 
     async processAllEndedPeriods(): Promise<void> {

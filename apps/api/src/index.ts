@@ -10,7 +10,7 @@ import { zodErrorHook } from "./lib/utils";
 import * as Config from "@bcwin/config";
 import { Cache } from "@bcwin/cache";
 import Logger from "@bcwin/logger";
-import { prisma } from "@bcwin/db";
+import { prisma, startPersistentDbPool, stopPersistentDbPool } from "@bcwin/db";
 import { User } from "./types";
 
 declare module "hono" {
@@ -27,6 +27,7 @@ const mainLogger = new Logger("main");
 
 try {
     await prisma.$connect();
+    await startPersistentDbPool();
     mainLogger.info("Connected to the database.");
 } catch (error) {
     mainLogger.error("Failed to connect to the database.", error);
@@ -105,8 +106,9 @@ const gracefulShutdown = async (signal: string) => {
 
     try {
         await Promise.all([
-            prisma
-                .$disconnect()
+            Promise.resolve()
+                .then(() => stopPersistentDbPool())
+                .then(() => prisma.$disconnect())
                 .then(() => mainLogger.info("Database disconnected.")),
             WebSocketManager.shutdown().then(async () => {
                 mainLogger.info("WebSocketManager disconnected.");

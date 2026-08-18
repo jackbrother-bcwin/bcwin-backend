@@ -103,13 +103,27 @@ export async function ensureSystemConfig() {
     });
 }
 
-export async function createActiveWingoPeriod(
+export async function createWingoPeriod(
     tracker: FixtureTracker,
-    durationSeconds = 60
+    opts: {
+        durationSeconds?: number;
+        startTime: Date;
+        endTime?: Date;
+        status?: "ACTIVE" | "ENDED" | "RESOLVED";
+        resultNumber?: number | null;
+        resultColor?: "RED" | "GREEN" | "VIOLET" | null;
+        resultSize?: "BIG" | "SMALL" | null;
+        suffix?: string;
+    }
 ) {
-    const startTime = new Date();
-    const endTime = new Date(startTime.getTime() + durationSeconds * 1000);
-    const periodNumber = `${tracker.periodPrefix}${durationSeconds}_${Date.now()}`;
+    const durationSeconds = opts.durationSeconds ?? 60;
+    const startTime = opts.startTime;
+    const endTime =
+        opts.endTime ??
+        new Date(startTime.getTime() + durationSeconds * 1000);
+    const periodNumber = `${tracker.periodPrefix}${durationSeconds}_${Date.now()}_${
+        opts.suffix ?? Math.random().toString(36).slice(2, 7)
+    }`;
 
     return prisma.wingoPeriod.create({
         data: {
@@ -117,8 +131,21 @@ export async function createActiveWingoPeriod(
             durationSeconds,
             startTime,
             endTime,
-            status: "ACTIVE",
+            status: opts.status ?? "ACTIVE",
+            resultNumber: opts.resultNumber ?? undefined,
+            resultColor: opts.resultColor ?? undefined,
+            resultSize: opts.resultSize ?? undefined,
         },
+    });
+}
+
+export async function createActiveWingoPeriod(
+    tracker: FixtureTracker,
+    durationSeconds = 60
+) {
+    return createWingoPeriod(tracker, {
+        durationSeconds,
+        startTime: new Date(),
     });
 }
 

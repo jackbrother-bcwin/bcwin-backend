@@ -69,6 +69,7 @@ export const periodRoutes = (app: OpenAPIHono) => {
 
             const whereClause = duration ? { durationSeconds: duration } : {};
 
+            const now = new Date();
             const [periods, total, currentPeriod] = await Promise.all([
                 prisma.wingoPeriod.findMany({
                     where: whereClause,
@@ -92,6 +93,8 @@ export const periodRoutes = (app: OpenAPIHono) => {
                     where: {
                         ...whereClause,
                         status: "ACTIVE",
+                        startTime: { lte: now },
+                        endTime: { gt: now },
                     },
                     orderBy: { startTime: "desc" },
                     select: {
@@ -110,20 +113,47 @@ export const periodRoutes = (app: OpenAPIHono) => {
 
             const totalPages = Math.ceil(total / limit);
 
+            const hideResult = <
+                T extends {
+                    endTime: Date;
+                    resultNumber: number | null;
+                    resultColor: string | null;
+                    resultSize: string | null;
+                },
+            >(
+                period: T
+            ) => {
+                if (period.endTime.getTime() > now.getTime()) {
+                    return {
+                        ...period,
+                        resultNumber: null,
+                        resultColor: null,
+                        resultSize: null,
+                    };
+                }
+                return period;
+            };
+
             return c.json(
                 {
                     success: true,
-                    periods: periods.map((period) => ({
-                        ...period,
-                        startTime: period.startTime.toISOString(),
-                        endTime: period.endTime.toISOString(),
-                    })),
+                    periods: periods.map((period) => {
+                        const p = hideResult(period);
+                        return {
+                            ...p,
+                            startTime: p.startTime.toISOString(),
+                            endTime: p.endTime.toISOString(),
+                        };
+                    }),
                     currentPeriod: currentPeriod
-                        ? {
-                              ...currentPeriod,
-                              startTime: currentPeriod.startTime.toISOString(),
-                              endTime: currentPeriod.endTime.toISOString(),
-                          }
+                        ? (() => {
+                              const p = hideResult(currentPeriod);
+                              return {
+                                  ...p,
+                                  startTime: p.startTime.toISOString(),
+                                  endTime: p.endTime.toISOString(),
+                              };
+                          })()
                         : null,
                     total,
                     currentPage: page,

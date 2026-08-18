@@ -3,7 +3,7 @@ import { Hono } from "hono";
 
 import Logger from "@bcwin/logger";
 import { Cache } from "@bcwin/cache";
-import { prisma } from "@bcwin/db";
+import { prisma, startPersistentDbPool, stopPersistentDbPool } from "@bcwin/db";
 import { WebSocketManager } from "@bcwin/websocket";
 
 import { WingoScheduler } from "./scheduler/wingoScheduler";
@@ -28,6 +28,7 @@ const logger = new Logger("engine");
 
 try {
     await prisma.$connect();
+    await startPersistentDbPool();
 } catch (error) {
     logger.error("Failed to connect to the database.", error);
     process.exit(1);
@@ -94,8 +95,9 @@ const gracefulShutdown = async (signal: string) => {
 
     try {
         await Promise.all([
-            prisma
-                .$disconnect()
+            Promise.resolve()
+                .then(() => stopPersistentDbPool())
+                .then(() => prisma.$disconnect())
                 .then(() => logger.info("Prisma disconnected.")),
             WebSocketManager.shutdown().then(async () => {
                 logger.info("WebSocketManager disconnected.");

@@ -10,13 +10,32 @@ const logger = new Logger("maintenance-middleware");
 
 const CACHE_KEY = "system:maintenance";
 const CACHE_TTL = 30; // seconds — short TTL so toggling takes effect quickly
+export const MAINTENANCE_FAIL_OPEN_TTL_SEC = 10;
 
 interface MaintenanceState {
     enabled: boolean;
     message: string | null;
 }
 
+const FAIL_OPEN_STATE: MaintenanceState = { enabled: false, message: null };
+
+let failOpenUntil = 0;
+
+export function isMaintenanceFailOpen(now = Date.now()): boolean {
+    return now < failOpenUntil;
+}
+
+export function noteMaintenanceDbFailure(now = Date.now()): void {
+    failOpenUntil = now + MAINTENANCE_FAIL_OPEN_TTL_SEC * 1000;
+}
+
+export function clearMaintenanceFailOpen(): void {
+    failOpenUntil = 0;
+}
+
 async function getMaintenanceState(): Promise<MaintenanceState> {
+    if (isMaintenanceFailOpen()) return FAIL_OPEN_STATE;
+
     const cached = await Cache.get<MaintenanceState>(CACHE_KEY);
     if (cached !== null && cached !== undefined) return cached;
 
@@ -30,12 +49,19 @@ async function getMaintenanceState(): Promise<MaintenanceState> {
             message: config?.maintananceMessage ?? null,
         };
 
+        clearMaintenanceFailOpen();
         await Cache.set(CACHE_KEY, state, CACHE_TTL);
         return state;
     } catch (err) {
-        // If DB is unreachable, fail open (do not block requests)
+        // Fail open and remember it so a Neon blip does not stampede the pool.
         logger.error("Failed to read maintenance config:", err);
-        return { enabled: false, message: null };
+        noteMaintenanceDbFailure();
+        await Cache.set(
+            CACHE_KEY,
+            FAIL_OPEN_STATE,
+            MAINTENANCE_FAIL_OPEN_TTL_SEC
+        );
+        return FAIL_OPEN_STATE;
     }
 }
 
@@ -73,5 +99,6 @@ export const maintenanceMiddleware = async (c: Context, next: Next) => {
  * so the change takes effect on the next request without waiting for TTL.
  */
 export async function invalidateMaintenanceCache(): Promise<void> {
+    clearMaintenanceFailOpen();
     await Cache.del(CACHE_KEY);
 }

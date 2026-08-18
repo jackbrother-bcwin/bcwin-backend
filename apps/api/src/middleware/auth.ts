@@ -6,6 +6,7 @@ import { prisma } from "@bcwin/db";
 import { HTTP_STATUS } from "../lib/http";
 import { middlewareApiError } from "../lib/utils";
 import { AUTH_COOKIE_NAME, decodeJwt } from "../lib/auth";
+import { authCatchResponse } from "../lib/dbError";
 
 const logger = new Logger("auth-middleware");
 
@@ -89,10 +90,7 @@ export const authMiddleware = async (c: Context, next: Next) => {
         await next();
     } catch (error) {
         logger.error(error);
-        return middlewareApiError(
-            c,
-            "Authentication failed",
-            HTTP_STATUS.UNAUTHORIZED
-        );
+        const { message, status } = authCatchResponse(error);
+        return middlewareApiError(c, message, status);
     }
 };

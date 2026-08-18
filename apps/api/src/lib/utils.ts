@@ -262,11 +262,18 @@ export function betLockSeconds(durationSeconds: number): number {
     return durationSeconds <= 30 ? 5 : 10;
 }
 
-/** True if now is inside the lock window (or after period end). */
+/** True if now is inside the lock window, after end, or before start (pre-created next). */
 export function isPeriodBettingLocked(
-    period: { endTime: Date; durationSeconds: number },
+    period: {
+        endTime: Date;
+        durationSeconds: number;
+        startTime?: Date;
+    },
     now: Date = new Date()
 ): boolean {
+    if (period.startTime && now.getTime() < period.startTime.getTime()) {
+        return true;
+    }
     const lockMs = betLockSeconds(period.durationSeconds) * 1000;
     return now.getTime() >= period.endTime.getTime() - lockMs;
 }
