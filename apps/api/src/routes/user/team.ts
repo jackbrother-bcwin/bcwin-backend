@@ -133,6 +133,96 @@ const teamMembersResponseSchema = z.object({
         .optional(),
 });
 
+/** Members who bet, deposited, or generated settled rebate in `range`. */
+async function memberIdsActiveOnDay(
+    memberIds: string[],
+    agentId: string,
+    range: NonNullable<DateRange>
+): Promise<Set<string>> {
+    if (memberIds.length === 0) return new Set();
+    const createdAt = { createdAt: range };
+    const [
+        wingo,
+        fiveD,
+        k3,
+        moto,
+        trx,
+        inout,
+        deposits,
+        rebates,
+    ] = await Promise.all([
+        prisma.wingoBet.findMany({
+            where: { userId: { in: memberIds }, ...createdAt },
+            select: { userId: true },
+            distinct: ["userId"],
+        }),
+        prisma.fiveDBet.findMany({
+            where: { userId: { in: memberIds }, ...createdAt },
+            select: { userId: true },
+            distinct: ["userId"],
+        }),
+        prisma.k3Bet.findMany({
+            where: { userId: { in: memberIds }, ...createdAt },
+            select: { userId: true },
+            distinct: ["userId"],
+        }),
+        prisma.motoBet.findMany({
+            where: { userId: { in: memberIds }, ...createdAt },
+            select: { userId: true },
+            distinct: ["userId"],
+        }),
+        prisma.trxWingoBet.findMany({
+            where: { userId: { in: memberIds }, ...createdAt },
+            select: { userId: true },
+            distinct: ["userId"],
+        }),
+        prisma.inoutBet.findMany({
+            where: {
+                userId: { in: memberIds },
+                isRolledback: false,
+                ...createdAt,
+            },
+            select: { userId: true },
+            distinct: ["userId"],
+        }),
+        prisma.deposit.findMany({
+            where: {
+                userId: { in: memberIds },
+                status: "SUCCESS",
+                ...createdAt,
+            },
+            select: { userId: true },
+            distinct: ["userId"],
+        }),
+        prisma.rebate.findMany({
+            where: {
+                userId: agentId,
+                fromUserId: { in: memberIds },
+                settled: true,
+                ...createdAt,
+            },
+            select: { fromUserId: true },
+            distinct: ["fromUserId"],
+        }),
+    ]);
+    const ids = new Set<string>();
+    for (const row of [
+        ...wingo,
+        ...fiveD,
+        ...k3,
+        ...moto,
+        ...trx,
+        ...inout,
+        ...deposits,
+    ]) {
+        ids.add(row.userId);
+    }
+    for (const row of rebates) {
+        if (row.fromUserId) ids.add(row.fromUserId);
+    }
+    return ids;
+}
+
 async function countBettors(
     userIds: string[],
     range?: DateRange
@@ -318,7 +408,7 @@ export const teamRoutes = (app: OpenAPIHono) => {
 
             // Short cache (20s). v6 = 6-stat overview box support
             const mainCacheKey = CacheKey.teamMembers(user.id);
-            const fieldKey = `v8-layer:${layer || "all"}-username:${
+            const fieldKey = `v9-layer:${layer || "all"}-username:${
                 username || "all"
             }-date:${date || "all"}-page:${page}-limit:${limitNum}`;
 
@@ -366,8 +456,8 @@ export const teamRoutes = (app: OpenAPIHono) => {
 
             // Filter by layer if specified
             let filteredMembers = teamMembers;
-            if (layer) {
-                const layerNum = parseInt(layer);
+            if (layer && layer !== "all") {
+                const layerNum = parseInt(layer, 10);
                 if (layerNum >= 1 && layerNum <= 6) {
                     filteredMembers = teamMembers.filter(
                         (m) => m.layer === layerNum
@@ -391,6 +481,19 @@ export const teamRoutes = (app: OpenAPIHono) => {
                         (m.user.email && m.user.email.toLowerCase().includes(query)) ||
                         (m.user.serialNumber &&
                             String(m.user.serialNumber).includes(query))
+                );
+            }
+
+            // Date filter: only people who actually played/deposited/paid
+            // rebate on that IST day — not the live roster (today's joins).
+            if (dayRange) {
+                const active = await memberIdsActiveOnDay(
+                    filteredMembers.map((m) => m.user.id),
+                    user.id,
+                    dayRange
+                );
+                filteredMembers = filteredMembers.filter((m) =>
+                    active.has(m.user.id)
                 );
             }
 

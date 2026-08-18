@@ -38,7 +38,7 @@ export const commissionBreakdownQuerySchema = z.object({
 export const teamQuerySchema = z.object({
     layer: z.string().optional().openapi({
         description:
-            "Filter by layer (1-6). If not provided, returns all layers",
+            "Filter by layer (1-6). Omit or pass all for every tier",
         example: "1",
     }),
     username: z.string().optional().openapi({
