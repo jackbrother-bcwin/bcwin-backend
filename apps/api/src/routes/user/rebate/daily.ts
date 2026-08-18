@@ -187,6 +187,7 @@ export const rebateDailyRoutes = (app: OpenAPIHono) => {
             const rebates = await prisma.rebate.findMany({
                 where: {
                     userId: user.id,
+                    settled: true,
                     createdAt: { gte, lt },
                 },
                 select: {

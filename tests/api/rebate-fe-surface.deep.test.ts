@@ -60,7 +60,7 @@ describe("Deep: FE rebate API surfaces (agency + history)", () => {
     test("GET /user/rebate/history returns accrued rows", async () => {
         const res = await get("/api/v1/user/rebate/history", {
             cookie: uplineCookie,
-            query: { page: 1, limit: 50 },
+            query: { page: 1, limit: 50, settled: "all" },
         });
         expect(res.status).toBe(200);
         expect(res.json?.success).toBe(true);

@@ -252,7 +252,24 @@ describe("Commission Detail Page & API Surface Edge Cases", () => {
             await Cache.del(CacheKey.rebateHistory(uplineIdA));
         });
 
-        test("GET /user/rebate/daily reflects L1 downline bet and commission in LOTTERY category", async () => {
+        test("GET /user/rebate/daily hides unsettled L1 rebate until 01:30 settle", async () => {
+            const today = getTodayYmd();
+            const res = await get("/api/v1/user/rebate/daily", {
+                cookie: uplineCookieA,
+                query: { date: today },
+            });
+
+            expect(res.status).toBe(200);
+            expect(res.json?.success).toBe(true);
+            const d = res.json.data;
+            expect(d.hasData).toBe(false);
+            expect(d.settled).toBe(false);
+            expect(d.totalCommission).toBe(0);
+            expect(d.bettorCount).toBe(0);
+        });
+
+        test("GET /user/rebate/daily reflects L1 after settle", async () => {
+            await RebateCalculator.settleAllUnsettledRebates();
             const today = getTodayYmd();
             const res = await get("/api/v1/user/rebate/daily", {
                 cookie: uplineCookieA,
@@ -263,6 +280,7 @@ describe("Commission Detail Page & API Surface Edge Cases", () => {
             expect(res.json?.success).toBe(true);
             const d = res.json.data;
             expect(d.hasData).toBe(true);
+            expect(d.settled).toBe(true);
             expect(d.bettorCount).toBe(1);
             expect(d.totalBetAmount).toBe(betAmount);
             expect(d.totalCommission).toBeGreaterThan(0);
@@ -290,7 +308,7 @@ describe("Commission Detail Page & API Surface Edge Cases", () => {
         test("GET /user/rebate/history contains downline B details and serialNumber", async () => {
             const res = await get("/api/v1/user/rebate/history", {
                 cookie: uplineCookieA,
-                query: { page: 1, limit: 10 },
+                query: { page: 1, limit: 10, settled: "all" },
             });
 
             expect(res.status).toBe(200);
@@ -304,7 +322,7 @@ describe("Commission Detail Page & API Surface Edge Cases", () => {
             expect(row.game).toBe("WINGO");
             expect(row.betAmount).toBe(betAmount);
             expect(row.amount).toBeGreaterThan(0);
-            expect(row.settled).toBe(false);
+            expect(row.settled).toBe(true);
             expect(row.fromUser.username).toBe(downlineB.username);
             expect(typeof row.fromUser.serialNumber).toBe("number");
         });
@@ -344,6 +362,7 @@ describe("Commission Detail Page & API Surface Edge Cases", () => {
         });
 
         test("GET /user/rebate/daily aggregates L1, L2, L3, L6 across LOTTERY, SLOTS, CASINO", async () => {
+            await RebateCalculator.settleAllUnsettledRebates();
             const today = getTodayYmd();
             const res = await get("/api/v1/user/rebate/daily", {
                 cookie: uplineCookieA,
@@ -397,6 +416,7 @@ describe("Commission Detail Page & API Surface Edge Cases", () => {
                 game: "WINGO",
                 betId: `dedup-b2-${Date.now()}`,
             });
+            await RebateCalculator.settleAllUnsettledRebates();
 
             const today = getTodayYmd();
             const res = await get("/api/v1/user/rebate/daily", {
@@ -436,7 +456,7 @@ describe("Commission Detail Page & API Surface Edge Cases", () => {
                     amount: 40.0,
                     rate: 0.005,
                     receiverVip: 2,
-                    settled: false,
+                    settled: true,
                     createdAt: yesterdayDate,
                 },
             });
@@ -481,13 +501,6 @@ describe("Commission Detail Page & API Surface Edge Cases", () => {
     describe("6. Settlement Lifecycle (Unsettled -> Settled)", () => {
         test("Settling all rebates updates settled status to true in /user/rebate/daily", async () => {
             const today = getTodayYmd();
-            const before = await get("/api/v1/user/rebate/daily", {
-                cookie: uplineCookieA,
-                query: { date: today },
-            });
-            expect(before.json?.data?.settled).toBe(false);
-
-            // Execute settlement engine
             await RebateCalculator.settleAllUnsettledRebates();
 
             const after = await get("/api/v1/user/rebate/daily", {
@@ -495,6 +508,7 @@ describe("Commission Detail Page & API Surface Edge Cases", () => {
                 query: { date: today },
             });
             expect(after.status).toBe(200);
+            expect(after.json?.data?.hasData).toBe(true);
             expect(after.json?.data?.settled).toBe(true);
         });
     });

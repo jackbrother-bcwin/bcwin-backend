@@ -318,7 +318,7 @@ export const teamRoutes = (app: OpenAPIHono) => {
 
             // Short cache (20s). v6 = 6-stat overview box support
             const mainCacheKey = CacheKey.teamMembers(user.id);
-            const fieldKey = `v7-layer:${layer || "all"}-username:${
+            const fieldKey = `v8-layer:${layer || "all"}-username:${
                 username || "all"
             }-date:${date || "all"}-page:${page}-limit:${limitNum}`;
 
@@ -415,15 +415,16 @@ export const teamRoutes = (app: OpenAPIHono) => {
                     };
                     if (dayRange) depositWhere.createdAt = dayRange;
 
-                    // ADR-0011: agency "commission" = team rebate from this downline
-                    // (all accrued; settled+unsettled so cards move before 01:30 IST)
+                    // Same as TX: only settled team rebate (after 01:30 IST)
                     const rebateWhere: {
                         userId: string;
                         fromUserId: string;
+                        settled: true;
                         createdAt?: DateRange;
                     } = {
                         userId: user.id,
                         fromUserId: member.id,
+                        settled: true,
                     };
                     if (dayRange) rebateWhere.createdAt = dayRange;
 
