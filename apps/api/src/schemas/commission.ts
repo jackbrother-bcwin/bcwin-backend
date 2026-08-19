@@ -213,15 +213,19 @@ export const teamOverviewSchema = z.object({
     directTeamBetting: z.number().optional(),
     directTeamDeposit: z.number().optional(),
     directDepositCount: z.number().optional().openapi({
-        description: "SUCCESS deposit row count (L1 only)",
+        description:
+            "SUCCESS deposit rows (L1). Lifetime if no date; that IST day if date= is set.",
     }),
     teamDepositCount: z.number().optional().openapi({
-        description: "SUCCESS deposit row count (L1–L6)",
+        description:
+            "SUCCESS deposit rows (L1–L6). Lifetime if no date; that IST day if date= is set.",
     }),
     directFirstDepositUsers: z.number().optional().openapi({
-        description: "L1 users with ≥1 SUCCESS deposit",
+        description:
+            "L1 users whose first SUCCESS deposit is in scope (all-time, or that IST day).",
     }),
     teamFirstDepositUsers: z.number().optional().openapi({
-        description: "L1–L6 users with ≥1 SUCCESS deposit",
+        description:
+            "L1–L6 users whose first SUCCESS deposit is in scope (all-time, or that IST day).",
     }),
 });

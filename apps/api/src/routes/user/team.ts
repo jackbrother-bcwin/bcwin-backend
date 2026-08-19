@@ -310,9 +310,21 @@ const getTeamOverviewRoute = createRoute({
     tags: ["user"],
     path: "/team/overview",
     summary: "Get team overview",
-    description: "Retrieve team statistics overview",
+    description:
+        "Lifetime team stats when `date` is omitted (also upserts TeamMetrics). " +
+        "With `date` (IST YYYY-MM-DD): register / SUCCESS deposits / first SUCCESS for that day only — no TeamMetrics write.",
     request: {
         cookies: authCookie,
+        query: z.object({
+            date: z
+                .string()
+                .optional()
+                .openapi({
+                    description:
+                        "Optional IST day YYYY-MM-DD. Omit for all-time (VIP/salary).",
+                    example: "2026-08-18",
+                }),
+        }),
     },
     responses: {
         200: {
@@ -323,6 +335,7 @@ const getTeamOverviewRoute = createRoute({
             },
             description: "Successfully retrieved team overview",
         },
+        ...CommonResponses.badRequest(),
         ...CommonResponses.unauthorized(),
         ...CommonResponses.internalServerError(),
     },
@@ -670,17 +683,42 @@ export const teamRoutes = (app: OpenAPIHono) => {
     app.openapi(getTeamOverviewRoute, async (c) => {
         try {
             const user = c.get("user");
+            const { date } = c.req.valid("query");
 
-            // Short Redis cache only (30s). Do NOT trust TeamMetrics for hours —
-            // that made Agent Commission show ₹0 / stale half-totals after new bets.
-            const cachedOverview = await Cache.get<{
+            let range: DateRange;
+            if (date) {
+                if (!isValidYmd(date)) {
+                    return apiError(
+                        c,
+                        "Invalid date format. Use YYYY-MM-DD",
+                        HTTP_STATUS.BAD_REQUEST
+                    );
+                }
+                range = {
+                    gte: parseYmdStartIst(date),
+                    lt: parseYmdEndExclusiveIst(date),
+                };
+            }
+
+            const cacheKey = range
+                ? `${CacheKey.teamOverview(user.id)}:${date}`
+                : CacheKey.teamOverview(user.id);
+
+            type OverviewPayload = {
                 directTeamSize: number;
                 totalTeamSize: number;
                 totalTeamBetting: number;
                 totalTeamDeposit: number;
                 totalCommissionEarned: number;
-            }>(CacheKey.teamOverview(user.id));
+                directTeamBetting: number;
+                directTeamDeposit: number;
+                directDepositCount: number;
+                teamDepositCount: number;
+                directFirstDepositUsers: number;
+                teamFirstDepositUsers: number;
+            };
 
+            const cachedOverview = await Cache.get<OverviewPayload>(cacheKey);
             if (cachedOverview) {
                 return c.json(
                     {
@@ -691,13 +729,23 @@ export const teamRoutes = (app: OpenAPIHono) => {
                 );
             }
 
-            // Live walk of L1–L6 + live bet/deposit aggregates (full stake, all games)
             const teamMembers = await getTeamMembers(user.id);
             const directMembers = teamMembers.filter((m) => m.layer === 1);
-            const directTeamSize = directMembers.length;
-            const totalTeamSize = teamMembers.length;
+
+            const inRange = (d: Date) =>
+                !range || (d >= range.gte && d < range.lt);
+
+            const registered = range
+                ? teamMembers.filter((m) => inRange(m.user.createdAt))
+                : teamMembers;
+            const registeredDirect = registered.filter((m) => m.layer === 1);
+
+            const directTeamSize = registeredDirect.length;
+            const totalTeamSize = registered.length;
+
             const memberIds = teamMembers.map((m) => m.user.id);
             const directIds = directMembers.map((m) => m.user.id);
+            const createdAt = range ? { createdAt: range } : {};
 
             const emptyDepAgg = {
                 _sum: { amount: 0 as number | null },
@@ -710,20 +758,21 @@ export const teamRoutes = (app: OpenAPIHono) => {
                 deposits,
                 directDeposits,
                 commissionTotal,
-                teamDepositors,
-                directDepositors,
+                firstsAll,
+                firstsDirect,
             ] = await Promise.all([
                 memberIds.length
-                    ? sumUserBetting({ in: memberIds })
+                    ? sumUserBetting({ in: memberIds }, range)
                     : Promise.resolve(0),
                 directIds.length
-                    ? sumUserBetting({ in: directIds })
+                    ? sumUserBetting({ in: directIds }, range)
                     : Promise.resolve(0),
                 memberIds.length
                     ? prisma.deposit.aggregate({
                           where: {
                               userId: { in: memberIds },
                               status: "SUCCESS",
+                              ...createdAt,
                           },
                           _sum: { amount: true },
                           _count: true,
@@ -734,85 +783,104 @@ export const teamRoutes = (app: OpenAPIHono) => {
                           where: {
                               userId: { in: directIds },
                               status: "SUCCESS",
+                              ...createdAt,
                           },
                           _sum: { amount: true },
                           _count: true,
                       })
                     : Promise.resolve(emptyDepAgg),
-                // ADR-0011: lifetime agency earnings = settled team rebates
                 prisma.rebate.aggregate({
-                    where: { userId: user.id, settled: true },
+                    where: {
+                        userId: user.id,
+                        settled: true,
+                        ...createdAt,
+                    },
                     _sum: { amount: true },
                 }),
                 memberIds.length
-                    ? prisma.deposit.findMany({
+                    ? prisma.deposit.groupBy({
+                          by: ["userId"],
                           where: {
                               userId: { in: memberIds },
                               status: "SUCCESS",
                           },
-                          select: { userId: true },
-                          distinct: ["userId"],
+                          _min: { createdAt: true },
                       })
-                    : Promise.resolve([] as { userId: string }[]),
+                    : Promise.resolve(
+                          [] as Array<{
+                              userId: string;
+                              _min: { createdAt: Date | null };
+                          }>
+                      ),
                 directIds.length
-                    ? prisma.deposit.findMany({
+                    ? prisma.deposit.groupBy({
+                          by: ["userId"],
                           where: {
                               userId: { in: directIds },
                               status: "SUCCESS",
                           },
-                          select: { userId: true },
-                          distinct: ["userId"],
+                          _min: { createdAt: true },
                       })
-                    : Promise.resolve([] as { userId: string }[]),
+                    : Promise.resolve(
+                          [] as Array<{
+                              userId: string;
+                              _min: { createdAt: Date | null };
+                          }>
+                      ),
             ]);
 
-            const totalTeamDeposit = deposits._sum.amount || 0;
-            const directTeamDeposit = directDeposits._sum.amount || 0;
+            const firstInWindow = (
+                rows: Array<{ _min: { createdAt: Date | null } }>
+            ) =>
+                rows.filter((r) => {
+                    const t = r._min.createdAt;
+                    return t != null && inRange(t);
+                }).length;
 
-            const finalData = {
+            const finalData: OverviewPayload = {
                 directTeamSize,
                 totalTeamSize,
                 totalTeamBetting,
-                totalTeamDeposit,
+                totalTeamDeposit: deposits._sum.amount || 0,
                 totalCommissionEarned: commissionTotal._sum.amount || 0,
                 directTeamBetting,
-                directTeamDeposit,
+                directTeamDeposit: directDeposits._sum.amount || 0,
                 directDepositCount: directDeposits._count || 0,
                 teamDepositCount: deposits._count || 0,
-                directFirstDepositUsers: directDepositors.length,
-                teamFirstDepositUsers: teamDepositors.length,
+                directFirstDepositUsers: firstInWindow(firstsDirect),
+                teamFirstDepositUsers: firstInWindow(firstsAll),
             };
 
-            // Persist TeamMetrics for VIP/salary (async-safe upsert; not used for stale reads)
-            void prisma.teamMetrics
-                .upsert({
-                    where: { userId: user.id },
-                    update: {
-                        directTeamSize,
-                        directTeamBetting,
-                        directTeamDeposit,
-                        totalTeamSize,
-                        totalTeamBetting,
-                        totalTeamDeposit,
-                        lastUpdated: new Date(),
-                    },
-                    create: {
-                        userId: user.id,
-                        directTeamSize,
-                        directTeamBetting,
-                        directTeamDeposit,
-                        totalTeamSize,
-                        totalTeamBetting,
-                        totalTeamDeposit,
-                        lastUpdated: new Date(),
-                    },
-                })
-                .catch((e) =>
-                    logger.warn("Failed to upsert team metrics", e)
-                );
+            if (!range) {
+                void prisma.teamMetrics
+                    .upsert({
+                        where: { userId: user.id },
+                        update: {
+                            directTeamSize,
+                            directTeamBetting,
+                            directTeamDeposit: finalData.directTeamDeposit,
+                            totalTeamSize,
+                            totalTeamBetting,
+                            totalTeamDeposit: finalData.totalTeamDeposit,
+                            lastUpdated: new Date(),
+                        },
+                        create: {
+                            userId: user.id,
+                            directTeamSize,
+                            directTeamBetting,
+                            directTeamDeposit: finalData.directTeamDeposit,
+                            totalTeamSize,
+                            totalTeamBetting,
+                            totalTeamDeposit: finalData.totalTeamDeposit,
+                            lastUpdated: new Date(),
+                        },
+                    })
+                    .catch((e) =>
+                        logger.warn("Failed to upsert team metrics", e)
+                    );
+            }
 
-            // 30s — fresh enough after downline bets without hammering DB
-            await Cache.set(CacheKey.teamOverview(user.id), finalData, 30);
+            await Cache.set(cacheKey, finalData, 30);
 
             return c.json(
                 {
