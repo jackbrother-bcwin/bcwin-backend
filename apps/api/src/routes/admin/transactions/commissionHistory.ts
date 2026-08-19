@@ -7,6 +7,10 @@ import { apiError, CommonResponses } from "@/lib/utils";
 import { authCookie, limit, page } from "@/schemas";
 import { prisma } from "@bcwin/db";
 import { Cache, CacheKey } from "@bcwin/cache";
+import {
+    ADMIN_USER_IDENTITY_SELECT,
+    mapAdminUserIdentity,
+} from "@/lib/adminUserIdentity";
 
 const logger = new Logger("admin-commission-history");
 
@@ -59,6 +63,11 @@ const CommissionItemSchema = z.object({
             description: "User mobile number",
             example: "9876543210",
         }),
+        email: z.string().nullable().optional(),
+        bank: z
+            .object({ fullName: z.string().nullable() })
+            .nullable()
+            .optional(),
     }),
     fromUserId: z.string().openapi({
         description: "User ID who generated the commission",
@@ -81,6 +90,11 @@ const CommissionItemSchema = z.object({
             description: "From user mobile number",
             example: "9876543211",
         }),
+        email: z.string().nullable().optional(),
+        bank: z
+            .object({ fullName: z.string().nullable() })
+            .nullable()
+            .optional(),
     }),
     layer: z.number().openapi({
         description: "Commission layer (1-6)",
@@ -176,7 +190,7 @@ export const commissionHistoryRoutes = (app: OpenAPIHono) => {
 
             // Check cache using hash-based caching
             const mainCacheKey = CacheKey.adminCommissionHistory;
-            const fieldKey = `userId:${userId || "all"}-fromUserId:${
+            const fieldKey = `v3-userId:${userId || "all"}-fromUserId:${
                 fromUserId || "all"
             }-layer:${layer || "all"}-betType:${
                 betType || "all"
@@ -248,20 +262,10 @@ export const commissionHistoryRoutes = (app: OpenAPIHono) => {
                     },
                     include: {
                         user: {
-                            select: {
-                                id: true,
-                                serialNumber: true,
-                                username: true,
-                                mobileNumber: true,
-                            },
+                            select: ADMIN_USER_IDENTITY_SELECT,
                         },
                         fromUser: {
-                            select: {
-                                id: true,
-                                serialNumber: true,
-                                username: true,
-                                mobileNumber: true,
-                            },
+                            select: ADMIN_USER_IDENTITY_SELECT,
                         },
                     },
                 }),
@@ -274,19 +278,9 @@ export const commissionHistoryRoutes = (app: OpenAPIHono) => {
                 commissions: commissions.map((commission) => ({
                     id: commission.id,
                     userId: commission.userId,
-                    user: {
-                        id: commission.user.id,
-                        serialNumber: commission.user.serialNumber,
-                        username: commission.user.username,
-                        mobileNumber: commission.user.mobileNumber,
-                    },
+                    user: mapAdminUserIdentity(commission.user),
                     fromUserId: commission.fromUserId,
-                    fromUser: {
-                        id: commission.fromUser.id,
-                        serialNumber: commission.fromUser.serialNumber,
-                        username: commission.fromUser.username,
-                        mobileNumber: commission.fromUser.mobileNumber,
-                    },
+                    fromUser: mapAdminUserIdentity(commission.fromUser),
                     layer: commission.layer,
                     userVipLevel: commission.userVipLevel,
                     commissionRate: commission.commissionRate,

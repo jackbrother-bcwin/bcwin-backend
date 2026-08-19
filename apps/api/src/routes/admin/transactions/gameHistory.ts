@@ -7,6 +7,10 @@ import { apiError, CommonResponses } from "@/lib/utils";
 import { authCookie, limit, page } from "@/schemas";
 import { prisma } from "@bcwin/db";
 import { Cache, CacheKey } from "@bcwin/cache";
+import {
+    ADMIN_USER_IDENTITY_SELECT,
+    mapAdminUserIdentity,
+} from "@/lib/adminUserIdentity";
 
 const logger = new Logger("admin-game-history");
 
@@ -73,6 +77,11 @@ const GameHistoryItemSchema = z.object({
             description: "User mobile number",
             example: "9876543210",
         }),
+        email: z.string().nullable().optional(),
+        bank: z
+            .object({ fullName: z.string().nullable() })
+            .nullable()
+            .optional(),
     }),
     createdAt: z.string().openapi({
         description: "Creation timestamp",
@@ -139,7 +148,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
 
             // Check cache using hash-based caching
             const mainCacheKey = CacheKey.adminGameHistory;
-            const fieldKey = `gameName:${gameName || "all"}-wins:${wins || "all"
+            const fieldKey = `v3-gameName:${gameName || "all"}-wins:${wins || "all"
                 }-userId:${userId || "all"
                 }-page:${page}-limit:${limit}`;
 
@@ -192,12 +201,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                     where: wingoWhere,
                     include: {
                         user: {
-                            select: {
-                                id: true,
-                                serialNumber: true,
-                                username: true,
-                                mobileNumber: true,
-                            },
+                            select: ADMIN_USER_IDENTITY_SELECT,
                         },
                         period: {
                             select: {
@@ -222,12 +226,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                     where: fiveDWhere,
                     include: {
                         user: {
-                            select: {
-                                id: true,
-                                serialNumber: true,
-                                username: true,
-                                mobileNumber: true,
-                            },
+                            select: ADMIN_USER_IDENTITY_SELECT,
                         },
                         period: {
                             select: {
@@ -251,12 +250,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                     where: k3Where,
                     include: {
                         user: {
-                            select: {
-                                id: true,
-                                serialNumber: true,
-                                username: true,
-                                mobileNumber: true,
-                            },
+                            select: ADMIN_USER_IDENTITY_SELECT,
                         },
                         period: {
                             select: {
@@ -280,12 +274,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                     where: motoWhere,
                     include: {
                         user: {
-                            select: {
-                                id: true,
-                                serialNumber: true,
-                                username: true,
-                                mobileNumber: true,
-                            },
+                            select: ADMIN_USER_IDENTITY_SELECT,
                         },
                         period: {
                             select: {
@@ -309,12 +298,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                     where: trxWingoWhere,
                     include: {
                         user: {
-                            select: {
-                                id: true,
-                                serialNumber: true,
-                                username: true,
-                                mobileNumber: true,
-                            },
+                            select: ADMIN_USER_IDENTITY_SELECT,
                         },
                         period: {
                             select: {
@@ -344,12 +328,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                     where: inoutWhere,
                     include: {
                         user: {
-                            select: {
-                                id: true,
-                                serialNumber: true,
-                                username: true,
-                                mobileNumber: true,
-                            },
+                            select: ADMIN_USER_IDENTITY_SELECT,
                         },
                     },
                     orderBy: {
@@ -376,12 +355,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                 winAmount: number;
                 status: string;
                 createdAt: Date;
-                user: {
-                    id: string;
-                    serialNumber: number;
-                    username: string;
-                    mobileNumber: string;
-                };
+                user: ReturnType<typeof mapAdminUserIdentity>;
                 metadata?: Record<string, any>;
             }> = [];
 
@@ -398,12 +372,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                     winAmount: bet.wingoBetResult?.winAmount || 0,
                     status: bet.status,
                     createdAt: bet.createdAt,
-                    user: {
-                        id: bet.user.id,
-                        serialNumber: bet.user.serialNumber,
-                        username: bet.user.username,
-                        mobileNumber: bet.user.mobileNumber,
-                    },
+                    user: mapAdminUserIdentity(bet.user),
                     metadata: {
                         periodNumber: bet.period.periodNumber,
                         betType: bet.betType,
@@ -423,12 +392,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                     winAmount: bet.fiveDBetResult?.winAmount || 0,
                     status: bet.status,
                     createdAt: bet.createdAt,
-                    user: {
-                        id: bet.user.id,
-                        serialNumber: bet.user.serialNumber,
-                        username: bet.user.username,
-                        mobileNumber: bet.user.mobileNumber,
-                    },
+                    user: mapAdminUserIdentity(bet.user),
                     metadata: {
                         periodNumber: bet.period.periodNumber,
                         betType: bet.betType,
@@ -447,12 +411,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                     winAmount: bet.k3BetResult?.winAmount || 0,
                     status: bet.status,
                     createdAt: bet.createdAt,
-                    user: {
-                        id: bet.user.id,
-                        serialNumber: bet.user.serialNumber,
-                        username: bet.user.username,
-                        mobileNumber: bet.user.mobileNumber,
-                    },
+                    user: mapAdminUserIdentity(bet.user),
                     metadata: {
                         periodNumber: bet.period.periodNumber,
                         betType: bet.betType,
@@ -471,12 +430,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                     winAmount: bet.motoBetResult?.winAmount || 0,
                     status: bet.status,
                     createdAt: bet.createdAt,
-                    user: {
-                        id: bet.user.id,
-                        serialNumber: bet.user.serialNumber,
-                        username: bet.user.username,
-                        mobileNumber: bet.user.mobileNumber,
-                    },
+                    user: mapAdminUserIdentity(bet.user),
                     metadata: {
                         periodNumber: bet.period.periodNumber,
                         betType: bet.betType,
@@ -495,12 +449,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                     winAmount: bet.trxWingoBetResult?.winAmount || 0,
                     status: bet.status,
                     createdAt: bet.createdAt,
-                    user: {
-                        id: bet.user.id,
-                        serialNumber: bet.user.serialNumber,
-                        username: bet.user.username,
-                        mobileNumber: bet.user.mobileNumber,
-                    },
+                    user: mapAdminUserIdentity(bet.user),
                     metadata: {
                         periodNumber: bet.period.periodNumber,
                         betType: bet.betType,
@@ -520,12 +469,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                     winAmount: bet.winAmount,
                     status: bet.isSettled ? "PENDING" : "SETTLED",
                     createdAt: bet.createdAt,
-                    user: {
-                        id: bet.user.id,
-                        serialNumber: bet.user.serialNumber,
-                        username: bet.user.username,
-                        mobileNumber: bet.user.mobileNumber,
-                    },
+                    user: mapAdminUserIdentity(bet.user),
                 }))
             );
 

@@ -211,6 +211,39 @@ describe("API: user / admin / payment / gift / activity", () => {
             expect(Number(afterDep.pendingAmount)).toBe(pendingBefore + 1000);
         });
 
+        test("GET admin deposit list includes user email and bank", async () => {
+            await prisma.user.update({
+                where: { id: user.id },
+                data: { email: `ars_${user.serialNumber}@ex.test` },
+            });
+            await prisma.bank.upsert({
+                where: { userId: user.id },
+                create: { userId: user.id, fullName: "Legal Name Test" },
+                update: { fullName: "Legal Name Test" },
+            });
+            await prisma.deposit.create({
+                data: {
+                    orderId: `${tracker.orderPrefix}ident`,
+                    amount: 11,
+                    method: "UPI",
+                    status: "SUCCESS",
+                    userId: user.id,
+                },
+            });
+            await Cache.del(CacheKey.adminDeposits);
+            const res = await get("/api/v1/admin/transactions/deposit", {
+                cookie: adminCookie,
+                query: { page: 1, limit: 30, userId: user.id },
+            });
+            expect(res.status).toBe(200);
+            const row = (res.json?.deposits ?? []).find(
+                (d: { userId?: string; user?: { id?: string } }) =>
+                    d.user?.id === user.id
+            );
+            expect(row?.user?.email).toBe(`ars_${user.serialNumber}@ex.test`);
+            expect(row?.user?.bank?.fullName).toBe("Legal Name Test");
+        });
+
         test("GET /api/v1/admin/users/list", async () => {
             const res = await get("/api/v1/admin/users/list", {
                 cookie: adminCookie,

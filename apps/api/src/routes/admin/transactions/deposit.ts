@@ -6,6 +6,10 @@ import { HTTP_STATUS } from "@/lib/http";
 import { apiError, CommonResponses } from "@/lib/utils";
 import { authCookie, limit, page } from "@/schemas";
 import { prisma, PaymentOrderStatus } from "@bcwin/db";
+import {
+    ADMIN_USER_IDENTITY_SELECT,
+    mapAdminUserIdentity,
+} from "@/lib/adminUserIdentity";
 import { WebSocketManager } from "@bcwin/websocket";
 import { Cache, CacheKey } from "@bcwin/cache";
 import {
@@ -74,6 +78,11 @@ const DepositItemSchema = z.object({
             description: "User mobile number",
             example: "9876543210",
         }),
+        email: z.string().nullable().optional(),
+        bank: z
+            .object({ fullName: z.string().nullable() })
+            .nullable()
+            .optional(),
     }),
     createdAt: z.string().openapi({
         description: "Creation timestamp",
@@ -194,7 +203,7 @@ export const depositRoutes = (app: OpenAPIHono) => {
 
             // Check cache using hash-based caching
             const mainCacheKey = CacheKey.adminDeposits;
-            const fieldKey = `status:${status || "all"}-method:${
+            const fieldKey = `v3-status:${status || "all"}-method:${
                 method || "all"
             }-userId:${userId || "all"}-page:${page}-limit:${limit}`;
 
@@ -250,12 +259,7 @@ export const depositRoutes = (app: OpenAPIHono) => {
                     },
                     include: {
                         user: {
-                            select: {
-                                id: true,
-                                serialNumber: true,
-                                username: true,
-                                mobileNumber: true,
-                            },
+                            select: ADMIN_USER_IDENTITY_SELECT,
                         },
                     },
                 }),
@@ -271,12 +275,7 @@ export const depositRoutes = (app: OpenAPIHono) => {
                     amount: deposit.amount,
                     method: deposit.method,
                     status: deposit.status,
-                    user: {
-                        id: deposit.user.id,
-                        serialNumber: deposit.user.serialNumber,
-                        username: deposit.user.username,
-                        mobileNumber: deposit.user.mobileNumber,
-                    },
+                    user: mapAdminUserIdentity(deposit.user),
                     createdAt: deposit.createdAt.toISOString(),
                     updatedAt: deposit.updatedAt.toISOString(),
                 })),

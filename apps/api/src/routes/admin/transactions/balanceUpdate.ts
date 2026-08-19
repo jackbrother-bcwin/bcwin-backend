@@ -7,6 +7,10 @@ import { apiError, CommonResponses } from "@/lib/utils";
 import { authCookie, limit, page } from "@/schemas";
 import { prisma } from "@bcwin/db";
 import { Cache, CacheKey } from "@bcwin/cache";
+import {
+    ADMIN_USER_IDENTITY_SELECT,
+    mapAdminUserIdentity,
+} from "@/lib/adminUserIdentity";
 
 const logger = new Logger("admin-balance-transactions");
 
@@ -51,6 +55,11 @@ const BalanceTransactionItemSchema = z.object({
             description: "User mobile number",
             example: "9876543210",
         }),
+        email: z.string().nullable().optional(),
+        bank: z
+            .object({ fullName: z.string().nullable() })
+            .nullable()
+            .optional(),
     }),
     by: z.object({
         id: z.string().openapi({
@@ -130,7 +139,7 @@ export const balanceTransactionRoutes = (app: OpenAPIHono) => {
 
             // Check cache using hash-based caching
             const mainCacheKey = CacheKey.adminBalanceTransactions;
-            const fieldKey = `search:${
+            const fieldKey = `v3-search:${
                 search || "all"
             }-page:${page}-limit:${limit}`;
 
@@ -192,12 +201,7 @@ export const balanceTransactionRoutes = (app: OpenAPIHono) => {
                     },
                     include: {
                         user: {
-                            select: {
-                                id: true,
-                                serialNumber: true,
-                                username: true,
-                                mobileNumber: true,
-                            },
+                            select: ADMIN_USER_IDENTITY_SELECT,
                         },
                         by: {
                             select: {
@@ -219,12 +223,7 @@ export const balanceTransactionRoutes = (app: OpenAPIHono) => {
                     id: transaction.id,
                     amount: transaction.amount,
                     reason: transaction.reason,
-                    user: {
-                        id: transaction.user.id,
-                        serialNumber: transaction.user.serialNumber,
-                        username: transaction.user.username,
-                        mobileNumber: transaction.user.mobileNumber,
-                    },
+                    user: mapAdminUserIdentity(transaction.user),
                     by: {
                         id: transaction.by.id,
                         serialNumber: transaction.by.serialNumber,

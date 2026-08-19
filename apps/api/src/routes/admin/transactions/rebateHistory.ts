@@ -7,6 +7,10 @@ import { apiError, CommonResponses } from "@/lib/utils";
 import { authCookie, limit, page } from "@/schemas";
 import { prisma } from "@bcwin/db";
 import { Cache, CacheKey } from "@bcwin/cache";
+import {
+    ADMIN_USER_IDENTITY_SELECT,
+    mapAdminUserIdentity,
+} from "@/lib/adminUserIdentity";
 
 const logger = new Logger("admin-rebate-history");
 
@@ -59,6 +63,11 @@ const RebateItemSchema = z.object({
             description: "User mobile number",
             example: "9876543210",
         }),
+        email: z.string().nullable().optional(),
+        bank: z
+            .object({ fullName: z.string().nullable() })
+            .nullable()
+            .optional(),
     }),
     amount: z.number().openapi({
         description: "Rebate amount",
@@ -137,7 +146,7 @@ export const rebateHistoryRoutes = (app: OpenAPIHono) => {
 
             // Check cache using hash-based caching
             const mainCacheKey = CacheKey.adminRebateHistory;
-            const fieldKey = `userId:${userId || "all"}-game:${
+            const fieldKey = `v3-userId:${userId || "all"}-game:${
                 game || "all"
             }-settled:${settled || "all"}-page:${page}-limit:${limit}`;
 
@@ -193,12 +202,7 @@ export const rebateHistoryRoutes = (app: OpenAPIHono) => {
                     },
                     include: {
                         user: {
-                            select: {
-                                id: true,
-                                serialNumber: true,
-                                username: true,
-                                mobileNumber: true,
-                            },
+                            select: ADMIN_USER_IDENTITY_SELECT,
                         },
                     },
                 }),
@@ -211,12 +215,7 @@ export const rebateHistoryRoutes = (app: OpenAPIHono) => {
                 rebates: rebates.map((rebate) => ({
                     id: rebate.id,
                     userId: rebate.userId,
-                    user: {
-                        id: rebate.user.id,
-                        serialNumber: rebate.user.serialNumber,
-                        username: rebate.user.username,
-                        mobileNumber: rebate.user.mobileNumber,
-                    },
+                    user: mapAdminUserIdentity(rebate.user),
                     amount: rebate.amount,
                     game: rebate.game,
                     settled: rebate.settled,
