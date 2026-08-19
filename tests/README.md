@@ -37,6 +37,7 @@ tests/
     auth.test.ts
     games.test.ts                  # wingo/k3/5d/moto/trxwingo
     user-admin-payment.test.ts
+    admin-real-success.deep.test.ts  # ADR-0024: real USER + SUCCESS admin summaries
     rebate-user-flow.deep.test.ts  # E2E: place bets → self/team rebate → claim → cron
     rebate-fe-surface.deep.test.ts
     self-rebate.deep.test.ts

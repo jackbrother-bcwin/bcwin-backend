@@ -16,3 +16,14 @@ export const REAL_USER_RELATION = {
 export const REAL_BET_USER_RELATION = {
     bet: { user: REAL_USER_WHERE },
 };
+
+/** Headline recharge / withdraw totals (ADR-0024). */
+export const REAL_SUCCESS_DEPOSIT_WHERE = {
+    ...REAL_USER_RELATION,
+    status: "SUCCESS" as const,
+};
+
+export const REAL_SUCCESS_WITHDRAW_WHERE = {
+    ...REAL_USER_RELATION,
+    status: "SUCCESS" as const,
+};

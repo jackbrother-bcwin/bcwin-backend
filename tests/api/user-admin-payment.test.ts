@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { prisma } from "@bcwin/db";
+import { Cache, CacheKey } from "@bcwin/cache";
 import {
     get,
     post,
@@ -147,6 +148,67 @@ describe("API: user / admin / payment / gift / activity", () => {
             });
             expect(res.status).toBe(200);
             expect(res.json?.success).toBe(true);
+        });
+
+        test("admin overview today recharge is SUCCESS real USER only", async () => {
+            const demo = await createTestUser(tracker, { balance: 0 });
+            await prisma.user.update({
+                where: { id: demo.id },
+                data: { isDemo: true },
+            });
+
+            await Cache.del(CacheKey.adminOverview);
+            const before = await get("/api/v1/admin/overview", {
+                cookie: adminCookie,
+            });
+            expect(before.status).toBe(200);
+            const dep = before.json?.data?.deposits ?? {};
+            const todayBefore = Number(dep.todayAmount ?? 0);
+            const successBefore = Number(dep.successAmount ?? 0);
+            const pendingBefore = Number(dep.pendingAmount ?? 0);
+
+            await prisma.deposit.createMany({
+                data: [
+                    {
+                        orderId: `${tracker.orderPrefix}ok`,
+                        amount: 250,
+                        method: "UPI",
+                        status: "SUCCESS",
+                        userId: user.id,
+                    },
+                    {
+                        orderId: `${tracker.orderPrefix}pend`,
+                        amount: 1000,
+                        method: "UPI",
+                        status: "PROCESSING",
+                        userId: user.id,
+                    },
+                    {
+                        orderId: `${tracker.orderPrefix}adm`,
+                        amount: 9999,
+                        method: "ADMIN_MANUAL",
+                        status: "SUCCESS",
+                        userId: admin.id,
+                    },
+                    {
+                        orderId: `${tracker.orderPrefix}demo`,
+                        amount: 500,
+                        method: "UPI",
+                        status: "SUCCESS",
+                        userId: demo.id,
+                    },
+                ],
+            });
+
+            await Cache.del(CacheKey.adminOverview);
+            const after = await get("/api/v1/admin/overview", {
+                cookie: adminCookie,
+            });
+            expect(after.status).toBe(200);
+            const afterDep = after.json?.data?.deposits ?? {};
+            expect(Number(afterDep.todayAmount)).toBe(todayBefore + 250);
+            expect(Number(afterDep.successAmount)).toBe(successBefore + 250);
+            expect(Number(afterDep.pendingAmount)).toBe(pendingBefore + 1000);
         });
 
         test("GET /api/v1/admin/users/list", async () => {

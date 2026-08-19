@@ -1,4 +1,5 @@
 import { prisma } from "@bcwin/db";
+import { REAL_USER_WHERE } from "@/lib/realUserFilter";
 
 // Helper function to get team members recursively
 export async function getTeamMembers(
@@ -21,7 +22,7 @@ export async function getTeamMembers(
                         })
                         .then((users) => users.map((u) => u.referralCode)),
                 },
-                isDemo: false,
+                ...REAL_USER_WHERE,
             },
             select: {
                 id: true,

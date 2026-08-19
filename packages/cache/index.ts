@@ -230,8 +230,8 @@ export class CacheKey {
     static vipRequirements = "config:vip-requirements:v2";
     static commissionRates = "config:commission-rates";
 
-    /** v2: exclude demo + ADMIN/SUB_ADMIN/AGENT from platform stats */
-    static adminOverview = "admin:overview:v2";
+    /** v3: real USER + SUCCESS today recharge/withdraw (ADR-0024) */
+    static adminOverview = "admin:overview:v3";
     static adminGifts = "admin:gifts";
     static adminUserStats = (userId: string) => `admin:user-stats:${userId}`;
     static adminWithdrawals = "admin:withdrawals";

@@ -7,6 +7,8 @@ import { HTTP_STATUS } from "@/lib/http";
 import { authCookie } from "@/schemas";
 import { Cache, CacheKey } from "@bcwin/cache";
 import {
+    REAL_SUCCESS_DEPOSIT_WHERE,
+    REAL_SUCCESS_WITHDRAW_WHERE,
     REAL_USER_RELATION,
     REAL_USER_WHERE,
 } from "@/lib/realUserFilter";
@@ -22,7 +24,8 @@ const createAdminOverviewRoute = <T extends RouteConfig>(config: T) => {
 
 const overviewCategorySchema = z.object({
     todayAmount: z.number().openapi({
-        description: "Total amount transacted today.",
+        description:
+            "SUCCESS amount today for real USERs (not pending / failed / staff / demo).",
         example: 5000,
     }),
     pendingAmount: z.number().openapi({
@@ -105,7 +108,7 @@ const GetAdminOverviewRoute = createAdminOverviewRoute({
     path: "/overview",
     summary: "Get the admin overview",
     description:
-        "Platform totals for real players only (role USER, not demo). Excludes ADMIN, SUB_ADMIN, AGENT.",
+        "Platform totals for real USERs only (not demo / admin / agent). Today’s recharge and withdraw are SUCCESS only. Pending stays on pendingAmount.",
     request: {
         cookies: authCookie,
     },
@@ -162,30 +165,35 @@ export const overviewRoutes = (app: OpenAPIHono) => {
                 activeUsersK3,
                 activeUsersMoto,
                 activeUsersTrxWingo,
+                activeUsersInout,
                 // All-time bets
                 allWingoBets,
                 allFiveDBets,
                 allK3Bets,
                 allMotoBets,
                 allTrxWingoBets,
+                allInoutBets,
                 // All-time wins
                 allWingoWins,
                 allFiveDWins,
                 allK3Wins,
                 allMotoWins,
                 allTrxWingoWins,
+                allInoutWins,
                 // Today's bets
                 todayWingoBets,
                 todayFiveDBets,
                 todayK3Bets,
                 todayMotoBets,
                 todayTrxWingoBets,
+                todayInoutBets,
                 // Today's wins
                 todayWingoWins,
                 todayFiveDWins,
                 todayK3Wins,
                 todayMotoWins,
                 todayTrxWingoWins,
+                todayInoutWins,
             ] = await Promise.all([
                 prisma.user.count({
                     where: REAL_USER_WHERE,
@@ -204,7 +212,10 @@ export const overviewRoutes = (app: OpenAPIHono) => {
                     _sum: { amount: true },
                 }),
                 prisma.deposit.aggregate({
-                    where: { createdAt: { gte: startOfToday }, ...REAL_USER_RELATION },
+                    where: {
+                        createdAt: { gte: startOfToday },
+                        ...REAL_SUCCESS_DEPOSIT_WHERE,
+                    },
                     _sum: { amount: true },
                 }),
 
@@ -214,7 +225,10 @@ export const overviewRoutes = (app: OpenAPIHono) => {
                     _sum: { amount: true },
                 }),
                 prisma.withdraw.aggregate({
-                    where: { createdAt: { gte: startOfToday }, ...REAL_USER_RELATION },
+                    where: {
+                        createdAt: { gte: startOfToday },
+                        ...REAL_SUCCESS_WITHDRAW_WHERE,
+                    },
                     _sum: { amount: true },
                 }),
 
@@ -244,6 +258,11 @@ export const overviewRoutes = (app: OpenAPIHono) => {
                     select: { userId: true },
                     distinct: ["userId"],
                 }),
+                prisma.inoutBet.findMany({
+                    where: { createdAt: { gte: oneWeekAgo }, ...REAL_USER_RELATION },
+                    select: { userId: true },
+                    distinct: ["userId"],
+                }),
 
                 // All-time total bets
                 prisma.wingoBet.aggregate({
@@ -263,6 +282,10 @@ export const overviewRoutes = (app: OpenAPIHono) => {
                     _sum: { betAmount: true },
                 }),
                 prisma.trxWingoBet.aggregate({
+                    where: { ...REAL_USER_RELATION },
+                    _sum: { betAmount: true },
+                }),
+                prisma.inoutBet.aggregate({
                     where: { ...REAL_USER_RELATION },
                     _sum: { betAmount: true },
                 }),
@@ -288,6 +311,10 @@ export const overviewRoutes = (app: OpenAPIHono) => {
                     where: { isWin: true, bet: { ...REAL_USER_RELATION } },
                     _sum: { winAmount: true },
                 }),
+                prisma.inoutBet.aggregate({
+                    where: { winAmount: { gt: 0 }, ...REAL_USER_RELATION },
+                    _sum: { winAmount: true },
+                }),
 
                 // Today's total bets
                 prisma.wingoBet.aggregate({
@@ -307,6 +334,10 @@ export const overviewRoutes = (app: OpenAPIHono) => {
                     _sum: { betAmount: true },
                 }),
                 prisma.trxWingoBet.aggregate({
+                    where: { createdAt: { gte: startOfToday }, ...REAL_USER_RELATION },
+                    _sum: { betAmount: true },
+                }),
+                prisma.inoutBet.aggregate({
                     where: { createdAt: { gte: startOfToday }, ...REAL_USER_RELATION },
                     _sum: { betAmount: true },
                 }),
@@ -352,6 +383,14 @@ export const overviewRoutes = (app: OpenAPIHono) => {
                     },
                     _sum: { winAmount: true },
                 }),
+                prisma.inoutBet.aggregate({
+                    where: {
+                        createdAt: { gte: startOfToday },
+                        winAmount: { gt: 0 },
+                        ...REAL_USER_RELATION,
+                    },
+                    _sum: { winAmount: true },
+                }),
             ]);
 
             // Calculate active users count (unique users across all games)
@@ -361,6 +400,7 @@ export const overviewRoutes = (app: OpenAPIHono) => {
                 ...activeUsersK3.map((u) => u.userId),
                 ...activeUsersMoto.map((u) => u.userId),
                 ...activeUsersTrxWingo.map((u) => u.userId),
+                ...activeUsersInout.map((u) => u.userId),
             ]);
             const activeUsersCount = activeUserIds.size;
 
@@ -370,14 +410,16 @@ export const overviewRoutes = (app: OpenAPIHono) => {
                 (allFiveDBets._sum.betAmount ?? 0) +
                 (allK3Bets._sum.betAmount ?? 0) +
                 (allMotoBets._sum.betAmount ?? 0) +
-                (allTrxWingoBets._sum.betAmount ?? 0);
+                (allTrxWingoBets._sum.betAmount ?? 0) +
+                (allInoutBets._sum.betAmount ?? 0);
 
             const totalWin =
                 (allWingoWins._sum.winAmount ?? 0) +
                 (allFiveDWins._sum.winAmount ?? 0) +
                 (allK3Wins._sum.winAmount ?? 0) +
                 (allMotoWins._sum.winAmount ?? 0) +
-                (allTrxWingoWins._sum.winAmount ?? 0);
+                (allTrxWingoWins._sum.winAmount ?? 0) +
+                (allInoutWins._sum.winAmount ?? 0);
 
             const profit = totalBet - totalWin;
 
@@ -387,14 +429,16 @@ export const overviewRoutes = (app: OpenAPIHono) => {
                 (todayFiveDBets._sum.betAmount ?? 0) +
                 (todayK3Bets._sum.betAmount ?? 0) +
                 (todayMotoBets._sum.betAmount ?? 0) +
-                (todayTrxWingoBets._sum.betAmount ?? 0);
+                (todayTrxWingoBets._sum.betAmount ?? 0) +
+                (todayInoutBets._sum.betAmount ?? 0);
 
             const todayTotalWin =
                 (todayWingoWins._sum.winAmount ?? 0) +
                 (todayFiveDWins._sum.winAmount ?? 0) +
                 (todayK3Wins._sum.winAmount ?? 0) +
                 (todayMotoWins._sum.winAmount ?? 0) +
-                (todayTrxWingoWins._sum.winAmount ?? 0);
+                (todayTrxWingoWins._sum.winAmount ?? 0) +
+                (todayInoutWins._sum.winAmount ?? 0);
 
             const todayProfit = todayTotalBet - todayTotalWin;
 
