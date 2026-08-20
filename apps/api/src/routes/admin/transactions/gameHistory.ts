@@ -11,6 +11,7 @@ import {
     ADMIN_USER_IDENTITY_SELECT,
     mapAdminUserIdentity,
 } from "@/lib/adminUserIdentity";
+import { wingoGameName } from "@/lib/lotteryDuration";
 
 const logger = new Logger("admin-game-history");
 
@@ -148,7 +149,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
 
             // Check cache using hash-based caching
             const mainCacheKey = CacheKey.adminGameHistory;
-            const fieldKey = `v3-gameName:${gameName || "all"}-wins:${wins || "all"
+            const fieldKey = `v4-gameName:${gameName || "all"}-wins:${wins || "all"
                 }-userId:${userId || "all"
                 }-page:${page}-limit:${limit}`;
 
@@ -367,7 +368,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                 ...wingoBets.map((bet: any) => ({
                     id: bet.id,
                     majorGameType: "WINGO" as const,
-                    gameName: `Wingo ${bet.period.durationSeconds / 60}Min`,
+                    gameName: wingoGameName(bet.period.durationSeconds),
                     betAmount: bet.betAmount,
                     winAmount: bet.wingoBetResult?.winAmount || 0,
                     status: bet.status,

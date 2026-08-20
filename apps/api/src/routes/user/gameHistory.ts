@@ -11,6 +11,7 @@ import {
     gameHistoryResponseSchema,
 } from "@/schemas/gameHistory";
 import { Cache, CacheKey } from "@bcwin/cache";
+import { wingoGameName } from "@/lib/lotteryDuration";
 
 const logger = new Logger("game-history");
 
@@ -54,7 +55,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
 
             // Check cache
             const mainCacheKey = CacheKey.gameHistory(user.id);
-            const fieldKey = `major:${majorGameType || "all"}-page:${page}-limit:${limit}`;
+            const fieldKey = `v2-major:${majorGameType || "all"}-page:${page}-limit:${limit}`;
 
             const cachedData = await Cache.hget<{
                 data: Array<{
@@ -235,7 +236,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                     ...wingoBets.map((bet: any) => ({
                         id: bet.id,
                         majorGameType: "WINGO",
-                        gameName: `Wingo ${bet.period.durationSeconds / 60}Min`,
+                        gameName: wingoGameName(bet.period.durationSeconds),
                         betAmount: bet.betAmount,
                         winAmount: bet.wingoBetResult?.winAmount || 0,
                         status: bet.status,
