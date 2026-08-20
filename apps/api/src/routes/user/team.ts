@@ -312,7 +312,9 @@ const getTeamOverviewRoute = createRoute({
     summary: "Get team overview",
     description:
         "Lifetime team stats when `date` is omitted (also upserts TeamMetrics). " +
-        "With `date` (IST YYYY-MM-DD): register / SUCCESS deposits / first SUCCESS for that day only — no TeamMetrics write.",
+        "With `date` (IST YYYY-MM-DD): register / SUCCESS deposits / first SUCCESS " +
+        "and team betting for that day only — no TeamMetrics write. Agent Commission " +
+        "uses today's date for live bet volume.",
     request: {
         cookies: authCookie,
         query: z.object({
