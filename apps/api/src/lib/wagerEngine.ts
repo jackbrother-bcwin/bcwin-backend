@@ -4,6 +4,9 @@ import { getTotalUserBets } from "@/lib/utils";
 
 export type WagerCategory = "RECHARGE" | "REWARD";
 
+/** Inclusive. Float leftovers never hit exact 0 (ADR-0027). */
+export const LOW_BALANCE_WAGER_CLEAR = 5;
+
 /**
  * Creates a wager requirement record for a deposit or reward claim.
  */
@@ -59,7 +62,7 @@ export interface UserWagerStatus {
 /**
  * Computes active wager requirements for a user, enforcing:
  * 1. Timestamp-based clearing (bets placed at/after item creation).
- * 2. Inout game bet exclusion.
+ * 2. First-party + Inout stake (rolled-back Inout ignored).
  * 3. Categorized breakdown (Deposit Wager vs Reward Wager).
  */
 export async function getUserWagerStatus(userId: string): Promise<UserWagerStatus> {
@@ -68,7 +71,7 @@ export async function getUserWagerStatus(userId: string): Promise<UserWagerStatu
         select: { balance: true },
     });
 
-    if (user && user.balance <= 0) {
+    if (user && user.balance <= LOW_BALANCE_WAGER_CLEAR) {
         await checkAndResetZeroBalanceWager(userId, user.balance);
         return {
             depositWagerNeeded: 0,
@@ -105,10 +108,8 @@ export async function getUserWagerStatus(userId: string): Promise<UserWagerStatu
     for (let i = 0; i < activeReqs.length; i++) {
         const req = activeReqs[i];
 
-        // Total non-Inout bets placed since req.createdAt
         const totalBetsSince = await getTotalUserBets(userId, {
             since: req.createdAt,
-            excludeInout: true,
         });
 
         // Subtract bets consumed by earlier active requirements
@@ -152,22 +153,21 @@ export async function getUserWagerStatus(userId: string): Promise<UserWagerStatu
 }
 
 /**
- * Resets active reward wager requirements if user balance reaches 0.
+ * Clears every open wager (RECHARGE + REWARD) when wallet is ≤ ₹5.
+ * Leftover rupees stay; withdraw is allowed; next recharge starts a new row.
  */
 export async function checkAndResetZeroBalanceWager(
     userId: string,
     currentBalance: number
 ) {
-    if (currentBalance <= 0) {
-        await prisma.wagerRequirement.updateMany({
-            where: {
-                userId,
-                isCleared: false,
-                sourceType: "REWARD",
-            },
-            data: {
-                isCleared: true,
-            },
-        });
-    }
+    if (currentBalance > LOW_BALANCE_WAGER_CLEAR) return;
+    await prisma.wagerRequirement.updateMany({
+        where: {
+            userId,
+            isCleared: false,
+        },
+        data: {
+            isCleared: true,
+        },
+    });
 }

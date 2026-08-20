@@ -84,7 +84,7 @@ describe("Strict Bonus & Deposit Wager System Tests", () => {
         expect(status.isWithdrawalFrozen).toBe(true);
     });
 
-    test("4. Inout bets DO NOT clear wager requirement", async () => {
+    test("4. Inout bets clear wager (ADR-0028)", async () => {
         await prisma.inoutBet.create({
             data: {
                 userId: testUserId,
@@ -100,32 +100,46 @@ describe("Strict Bonus & Deposit Wager System Tests", () => {
         });
 
         const status = await getUserWagerStatus(testUserId);
-        // Inout bet does NOT clear wager, so 50 reward wager is still needed!
-        expect(status.rewardWagerNeeded).toBe(50);
-        expect(status.isWithdrawalFrozen).toBe(true);
+        expect(status.rewardWagerNeeded).toBe(0);
+        expect(status.totalNeedToBet).toBe(0);
+        expect(status.isWithdrawalFrozen).toBe(false);
     });
 
-    test("5. Wingo bet after reward claim clears the reward wager", async () => {
-        const period = await prisma.wingoPeriod.create({
-            data: {
-                periodNumber: `P2_${Date.now()}`,
-                durationSeconds: 60,
-                startTime: new Date(),
-                endTime: new Date(Date.now() + 60000),
-            },
-        });
+    test("5. Rolled-back Inout does not clear; live Inout does", async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        await createWagerRequirement(prisma, testUserId, "REWARD", 50);
 
-        await prisma.wingoBet.create({
+        await prisma.inoutBet.create({
             data: {
                 userId: testUserId,
-                periodId: period.id,
+                token: "token-rb",
+                gameMode: "inout",
                 betAmount: 50,
-                contractAmount: 49,
-                betType: "COLOR" as any,
-                betChoice: "GREEN",
+                currency: "INR",
+                operator: "op1",
+                transactionId: `TX_RB_${Date.now()}`,
+                gameId: "g1",
+                winAmount: 0,
+                isRolledback: true,
             },
         });
+        const stillOpen = await getUserWagerStatus(testUserId);
+        expect(stillOpen.rewardWagerNeeded).toBe(50);
+        expect(stillOpen.isWithdrawalFrozen).toBe(true);
 
+        await prisma.inoutBet.create({
+            data: {
+                userId: testUserId,
+                token: "token-ok",
+                gameMode: "inout",
+                betAmount: 50,
+                currency: "INR",
+                operator: "op1",
+                transactionId: `TX_OK_${Date.now()}`,
+                gameId: "g1",
+                winAmount: 10,
+            },
+        });
         const status = await getUserWagerStatus(testUserId);
         expect(status.rewardWagerNeeded).toBe(0);
         expect(status.totalNeedToBet).toBe(0);
@@ -146,5 +160,55 @@ describe("Strict Bonus & Deposit Wager System Tests", () => {
         expect(statusAfter.rewardWagerNeeded).toBe(0);
         expect(statusAfter.totalNeedToBet).toBe(0);
         expect(statusAfter.isWithdrawalFrozen).toBe(false);
+    });
+
+    test("7. Balance ≤ ₹5 clears RECHARGE and REWARD wager (ADR-0027)", async () => {
+        await prisma.user.update({
+            where: { id: testUserId },
+            data: { balance: 3.4 },
+        });
+        await createWagerRequirement(prisma, testUserId, "RECHARGE", 200);
+        await createWagerRequirement(prisma, testUserId, "REWARD", 50);
+
+        const status = await getUserWagerStatus(testUserId);
+        expect(status.depositWagerNeeded).toBe(0);
+        expect(status.rewardWagerNeeded).toBe(0);
+        expect(status.totalNeedToBet).toBe(0);
+        expect(status.isWithdrawalFrozen).toBe(false);
+
+        const open = await prisma.wagerRequirement.count({
+            where: { userId: testUserId, isCleared: false },
+        });
+        expect(open).toBe(0);
+    });
+
+    test("8. Balance ₹5.01 does not wipe wager", async () => {
+        await prisma.user.update({
+            where: { id: testUserId },
+            data: { balance: 5.01 },
+        });
+        await createWagerRequirement(prisma, testUserId, "RECHARGE", 80);
+
+        const status = await getUserWagerStatus(testUserId);
+        expect(status.depositWagerNeeded).toBe(80);
+        expect(status.isWithdrawalFrozen).toBe(true);
+    });
+
+    test("9. After low-balance wipe, a new recharge starts a fresh wager", async () => {
+        await prisma.user.update({
+            where: { id: testUserId },
+            data: { balance: 1 },
+        });
+        const statusBroke = await getUserWagerStatus(testUserId);
+        expect(statusBroke.totalNeedToBet).toBe(0);
+
+        await prisma.user.update({
+            where: { id: testUserId },
+            data: { balance: 100 },
+        });
+        await createWagerRequirement(prisma, testUserId, "RECHARGE", 100);
+        const status = await getUserWagerStatus(testUserId);
+        expect(status.depositWagerNeeded).toBe(100);
+        expect(status.isWithdrawalFrozen).toBe(true);
     });
 });

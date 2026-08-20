@@ -165,7 +165,7 @@ export const getTotalUserBets = async (
     if (!options?.excludeInout) {
         promises.push(
             prisma.inoutBet.aggregate({
-                where: whereClause,
+                where: { ...whereClause, isRolledback: false },
                 _sum: { betAmount: true },
             })
         );
