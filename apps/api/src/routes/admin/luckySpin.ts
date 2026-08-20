@@ -24,7 +24,8 @@ export const luckySpinAdminRoutes = (app: OpenAPIHono) => {
             path: "/lucky-spin/rules",
             tags: ["admin"],
             summary: "Get all lucky spin rules",
-            description: "Retrieve all rules governing extra spin chances. A rule defines the minimum cumulative deposit (`minDeposit`) a user must make in a day to receive a specific number of extra spins (`spinChances`). Rules with `isActive: true` are evaluated daily.",
+            description:
+                "Lucky Spin recharge tiers. Each SUCCESS deposit awards `spinChances` from the highest `minDeposit` it meets (not stacked). Below the lowest tier = 0. Same deposit is stamped once (`metadata.luckySpinsAwarded`).",
             request: {
                 cookies: authCookie,
             },
@@ -41,6 +42,7 @@ export const luckySpinAdminRoutes = (app: OpenAPIHono) => {
         }),
         async (c) => {
             const rules = await prisma.luckySpinRule.findMany({
+                where: { kind: "LUCKY" },
                 orderBy: { minDeposit: "asc" },
             });
 
@@ -91,7 +93,7 @@ export const luckySpinAdminRoutes = (app: OpenAPIHono) => {
             const body = c.req.valid("json");
 
             const rule = await prisma.luckySpinRule.create({
-                data: body,
+                data: { ...body, kind: "LUCKY" },
             });
 
             return c.json(

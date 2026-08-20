@@ -8,6 +8,12 @@ import { HTTP_STATUS } from "@/lib/http";
 import { apiError, CommonResponses } from "@/lib/utils";
 import { authCookie } from "@/schemas";
 import { WebSocketManager } from "@bcwin/websocket";
+import {
+    DEFAULT_LUCKY_SPIN_RULES,
+    mergeLuckySpinsAwarded,
+    readLuckySpinsAwarded,
+    spinsForDepositAmount,
+} from "@/lib/luckySpinTiers";
 
 const logger = new Logger("activity-lucky-spin");
 
@@ -68,23 +74,18 @@ async function selectLuckyReward(): Promise<{
     return { amount: last.amount, sliceIndex: last.sliceIndex };
 }
 
-async function calculateLuckyExtraSpins(
-    cumulativeDeposit: number
-): Promise<number> {
-    const rules = await prisma.luckySpinRule.findMany({
+async function loadLuckyRules() {
+    const rows = await prisma.luckySpinRule.findMany({
         where: { isActive: true, kind: "LUCKY" },
         orderBy: { minDeposit: "asc" },
+        select: { minDeposit: true, spinChances: true },
     });
-    let total = 0;
-    for (const rule of rules) {
-        if (cumulativeDeposit >= rule.minDeposit) total += rule.spinChances;
-    }
-    return total;
+    return rows.length > 0 ? rows : [...DEFAULT_LUCKY_SPIN_RULES];
 }
 
 /**
- * Ensure SpinWheel row exists; refresh deposit total; unlock lucky spins from
- * deposit rules without wiping manual grants (max of calculated vs current).
+ * Stamp each SUCCESS recharge with luckySpinsAwarded once (audit).
+ * Remaining lucky spins = today's awards − lucky spins used today.
  */
 async function getOrUpdateLuckySpins(userId: string): Promise<{
     luckyAvailableSpins: number;
@@ -95,29 +96,46 @@ async function getOrUpdateLuckySpins(userId: string): Promise<{
 
     let spinWheel = await prisma.spinWheel.findUnique({ where: { userId } });
 
-    const deposits = await prisma.deposit.aggregate({
-        where: {
-            userId,
-            status: PaymentOrderStatus.SUCCESS,
-            createdAt: { gte: dayStart, lte: now },
-        },
-        _sum: { amount: true },
-    });
-    const cumulativeDeposit = deposits._sum.amount || 0;
-    const extraFromDeposit = await calculateLuckyExtraSpins(cumulativeDeposit);
+    const [rules, deposits, usedToday] = await Promise.all([
+        loadLuckyRules(),
+        prisma.deposit.findMany({
+            where: {
+                userId,
+                status: PaymentOrderStatus.SUCCESS,
+                createdAt: { gte: dayStart, lte: now },
+            },
+            select: { id: true, amount: true, metadata: true },
+        }),
+        prisma.activityBonus.count({
+            where: {
+                userId,
+                type: "SPIN_WHEEL" as any,
+                createdAt: { gte: dayStart, lte: now },
+                metadata: { path: ["wheel"], equals: "lucky" },
+            },
+        }),
+    ]);
 
-    // Count lucky spins used today (metadata.wheel === "lucky")
-    const usedToday = await prisma.activityBonus.count({
-        where: {
-            userId,
-            type: "SPIN_WHEEL" as any,
-            createdAt: { gte: dayStart, lte: now },
-            // Prisma JSON filter
-            metadata: { path: ["wheel"], equals: "lucky" },
-        },
-    });
+    let awardedToday = 0;
+    let cumulativeDeposit = 0;
+    for (const d of deposits) {
+        cumulativeDeposit += Number(d.amount) || 0;
+        const already = readLuckySpinsAwarded(d.metadata);
+        if (already != null) {
+            awardedToday += already;
+            continue;
+        }
+        const n = spinsForDepositAmount(Number(d.amount) || 0, rules);
+        await prisma.deposit.update({
+            where: { id: d.id },
+            data: {
+                metadata: mergeLuckySpinsAwarded(d.metadata, n) as object,
+            },
+        });
+        awardedToday += n;
+    }
 
-    const calculated = Math.max(0, extraFromDeposit - usedToday);
+    const calculated = Math.max(0, awardedToday - usedToday);
 
     if (!spinWheel) {
         spinWheel = await prisma.spinWheel.create({
@@ -130,20 +148,17 @@ async function getOrUpdateLuckySpins(userId: string): Promise<{
                 extraSpinsClaimed: false,
             },
         });
-    } else {
-        const keep = Math.max(calculated, spinWheel.luckyAvailableSpins);
-        if (
-            keep !== spinWheel.luckyAvailableSpins ||
-            cumulativeDeposit !== spinWheel.dailyCumulativeDeposit
-        ) {
-            spinWheel = await prisma.spinWheel.update({
-                where: { userId },
-                data: {
-                    luckyAvailableSpins: keep,
-                    dailyCumulativeDeposit: cumulativeDeposit,
-                },
-            });
-        }
+    } else if (
+        calculated !== spinWheel.luckyAvailableSpins ||
+        cumulativeDeposit !== spinWheel.dailyCumulativeDeposit
+    ) {
+        spinWheel = await prisma.spinWheel.update({
+            where: { userId },
+            data: {
+                luckyAvailableSpins: calculated,
+                dailyCumulativeDeposit: cumulativeDeposit,
+            },
+        });
     }
 
     return {
@@ -187,7 +202,7 @@ const statusRoute = createRoute({
     path: "/lucky-spin",
     summary: "Lucky Spin status",
     description:
-        "Available lucky spins, today's recharge total, deposit→spin rules, cash prize list (no physical prizes).",
+        "Available lucky spins from today's SUCCESS recharges (highest tier per deposit, not stacked), deposit→spin rules, cash prize list.",
     request: { cookies: authCookie },
     responses: {
         200: {
@@ -259,11 +274,7 @@ export const luckySpinUserRoutes = (app: OpenAPIHono) => {
                 await getOrUpdateLuckySpins(user.id);
 
             const [rules, prizes] = await Promise.all([
-                prisma.luckySpinRule.findMany({
-                    where: { isActive: true, kind: "LUCKY" },
-                    orderBy: { minDeposit: "asc" },
-                    select: { minDeposit: true, spinChances: true },
-                }),
+                loadLuckyRules(),
                 prisma.luckySpinReward.findMany({
                     where: { isActive: true, kind: "LUCKY" },
                     orderBy: { amount: "asc" },

@@ -40,12 +40,17 @@ const INVITE_RULES: ReadonlyArray<{ minDeposit: number; spinChances: number }> =
     { minDeposit: 10000, spinChances: 3 },
 ];
 
+/** Highest-tier Lucky Spin (per SUCCESS recharge). Keep in sync with luckySpinTiers.ts */
 const LUCKY_RULES: ReadonlyArray<{ minDeposit: number; spinChances: number }> = [
-    { minDeposit: 100, spinChances: 1 },
-    { minDeposit: 300, spinChances: 1 },
+    { minDeposit: 200, spinChances: 1 },
     { minDeposit: 500, spinChances: 1 },
-    { minDeposit: 1000, spinChances: 2 },
-    { minDeposit: 5000, spinChances: 3 },
+    { minDeposit: 1000, spinChances: 1 },
+    { minDeposit: 2000, spinChances: 1 },
+    { minDeposit: 5000, spinChances: 1 },
+    { minDeposit: 10000, spinChances: 2 },
+    { minDeposit: 30000, spinChances: 3 },
+    { minDeposit: 50000, spinChances: 5 },
+    { minDeposit: 100000, spinChances: 5 },
 ];
 
 /**
@@ -89,14 +94,29 @@ async function upsertRules(
     rows: ReadonlyArray<{ minDeposit: number; spinChances: number }>
 ): Promise<void> {
     const existing = await prisma.luckySpinRule.findMany({ where: { kind } });
-    if (existing.length === 0) {
-        await prisma.luckySpinRule.createMany({
-            data: rows.map((r) => ({
-                kind,
-                minDeposit: r.minDeposit,
-                spinChances: r.spinChances,
-                isActive: true,
-            })),
+    const keep = new Set(rows.map((r) => r.minDeposit));
+    for (const r of rows) {
+        const found = existing.find((e) => e.minDeposit === r.minDeposit);
+        if (found) {
+            await prisma.luckySpinRule.update({
+                where: { id: found.id },
+                data: { spinChances: r.spinChances, isActive: true },
+            });
+        } else {
+            await prisma.luckySpinRule.create({
+                data: {
+                    kind,
+                    minDeposit: r.minDeposit,
+                    spinChances: r.spinChances,
+                    isActive: true,
+                },
+            });
+        }
+    }
+    if (existing.length > 0) {
+        await prisma.luckySpinRule.updateMany({
+            where: { kind, minDeposit: { notIn: [...keep] } },
+            data: { isActive: false },
         });
     }
 }
