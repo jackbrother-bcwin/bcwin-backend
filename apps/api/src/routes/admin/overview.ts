@@ -12,6 +12,7 @@ import {
     REAL_USER_RELATION,
     REAL_USER_WHERE,
 } from "@/lib/realUserFilter";
+import { parseYmdStartIst, shiftYmdIst, ymdIst } from "@/lib/istDate";
 
 const logger = new Logger("admin-overview");
 
@@ -146,11 +147,9 @@ export const overviewRoutes = (app: OpenAPIHono) => {
                 );
             }
 
-            const startOfToday = new Date();
-            startOfToday.setHours(0, 0, 0, 0);
-
-            const oneWeekAgo = new Date();
-            oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+            const todayYmd = ymdIst();
+            const startOfToday = parseYmdStartIst(todayYmd);
+            const oneWeekAgo = parseYmdStartIst(shiftYmdIst(todayYmd, -7));
 
             const [
                 totalUsers,

@@ -7,6 +7,12 @@ import { HTTP_STATUS } from "@/lib/http";
 import { authCookie } from "@/schemas";
 import { Cache, CacheKey } from "@bcwin/cache";
 import { REAL_USER_WHERE } from "@/lib/realUserFilter";
+import {
+    firstOfIstMonth,
+    istInclusiveRange,
+    mondayOfIstWeek,
+    ymdIst,
+} from "@/lib/istDate";
 
 const logger = new Logger("admin-top-performance");
 
@@ -20,43 +26,18 @@ const timeFilterSchema = z
 
 // Date range utility functions
 function getDateRange(filter: string): { start: Date | null; end: Date } {
-    const now = new Date();
-    const start = new Date();
-    const end = new Date();
-
+    const today = ymdIst();
     switch (filter) {
         case "all_time":
-            return { start: null, end: now };
-
-        case "this_week": {
-            const dayOfWeek = now.getDay();
-            const diff = now.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1); // Monday
-            const monday = new Date(now);
-            monday.setDate(diff);
-            start.setTime(monday.getTime());
-            start.setHours(0, 0, 0, 0);
-            end.setHours(23, 59, 59, 999);
-            return { start, end };
-        }
-
-        case "this_month": {
-            start.setDate(1);
-            start.setHours(0, 0, 0, 0);
-            const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-            end.setTime(lastDay.getTime());
-            end.setHours(23, 59, 59, 999);
-            return { start, end };
-        }
-
-        case "this_year": {
-            start.setMonth(0, 1);
-            start.setHours(0, 0, 0, 0);
-            end.setHours(23, 59, 59, 999);
-            return { start, end };
-        }
-
+            return { start: null, end: new Date() };
+        case "this_week":
+            return { ...istInclusiveRange(mondayOfIstWeek(), today) };
+        case "this_month":
+            return { ...istInclusiveRange(firstOfIstMonth(today), today) };
+        case "this_year":
+            return { ...istInclusiveRange(`${today.slice(0, 4)}-01-01`, today) };
         default:
-            return { start: null, end: now };
+            return { start: null, end: new Date() };
     }
 }
 

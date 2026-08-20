@@ -7,6 +7,15 @@ import { HTTP_STATUS } from "@/lib/http";
 import { authCookie } from "@/schemas";
 import { Cache, CacheKey } from "@bcwin/cache";
 import { REAL_USER_WHERE } from "@/lib/realUserFilter";
+import {
+    firstOfIstMonth,
+    istInclusiveDay,
+    istInclusiveRange,
+    mondayOfIstWeek,
+    prevIstMonthRange,
+    shiftYmdIst,
+    ymdIst,
+} from "@/lib/istDate";
 
 const logger = new Logger("admin-profit-loss");
 
@@ -25,89 +34,29 @@ const dateFilterSchema = z
         example: "today",
     });
 
-// Date range utility functions
+/** IST 00:00–24:00 buckets (ADR-0030). */
 function getDateRange(filter: string): { start: Date; end: Date } {
-    const now = new Date();
-    const start = new Date();
-    const end = new Date();
-
+    const today = ymdIst();
     switch (filter) {
-        case "today": {
-            start.setHours(0, 0, 0, 0);
-            end.setHours(23, 59, 59, 999);
-            break;
-        }
-
-        case "yesterday": {
-            const yesterday = new Date(now);
-            yesterday.setDate(yesterday.getDate() - 1);
-            start.setTime(yesterday.getTime());
-            start.setHours(0, 0, 0, 0);
-            end.setTime(yesterday.getTime());
-            end.setHours(23, 59, 59, 999);
-            break;
-        }
-
-        case "this_week": {
-            const dayOfWeek = now.getDay();
-            const diff = now.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1); // Monday
-            const monday = new Date(now);
-            monday.setDate(diff);
-            start.setTime(monday.getTime());
-            start.setHours(0, 0, 0, 0);
-            end.setHours(23, 59, 59, 999);
-            break;
-        }
-
+        case "today":
+            return istInclusiveDay(today);
+        case "yesterday":
+            return istInclusiveDay(shiftYmdIst(today, -1));
+        case "this_week":
+            return istInclusiveRange(mondayOfIstWeek(), today);
         case "last_week": {
-            const dayOfWeek = now.getDay();
-            const thisWeekMonday =
-                now.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
-            const lastWeekMonday = new Date(now);
-            lastWeekMonday.setDate(thisWeekMonday - 7);
-            const lastWeekSunday = new Date(lastWeekMonday);
-            lastWeekSunday.setDate(lastWeekMonday.getDate() + 6);
-            start.setTime(lastWeekMonday.getTime());
-            start.setHours(0, 0, 0, 0);
-            end.setTime(lastWeekSunday.getTime());
-            end.setHours(23, 59, 59, 999);
-            break;
+            const thisMon = mondayOfIstWeek();
+            const lastMon = shiftYmdIst(thisMon, -7);
+            const lastSun = shiftYmdIst(thisMon, -1);
+            return istInclusiveRange(lastMon, lastSun);
         }
-
-        case "this_month": {
-            start.setDate(1);
-            start.setHours(0, 0, 0, 0);
-            const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-            end.setTime(lastDay.getTime());
-            end.setHours(23, 59, 59, 999);
-            break;
-        }
-
-        case "last_month": {
-            const lastMonth = new Date(
-                now.getFullYear(),
-                now.getMonth() - 1,
-                1
-            );
-            const lastDayOfLastMonth = new Date(
-                now.getFullYear(),
-                now.getMonth(),
-                0
-            );
-            start.setTime(lastMonth.getTime());
-            start.setHours(0, 0, 0, 0);
-            end.setTime(lastDayOfLastMonth.getTime());
-            end.setHours(23, 59, 59, 999);
-            break;
-        }
-
-        default: {
-            start.setHours(0, 0, 0, 0);
-            end.setHours(23, 59, 59, 999);
-        }
+        case "this_month":
+            return istInclusiveRange(firstOfIstMonth(today), today);
+        case "last_month":
+            return prevIstMonthRange(today);
+        default:
+            return istInclusiveDay(today);
     }
-
-    return { start, end };
 }
 
 // Game statistics schema

@@ -38,6 +38,59 @@ export function isValidYmd(ymd: string): boolean {
     return /^\d{4}-\d{2}-\d{2}$/.test(ymd);
 }
 
+/** IST weekday: 0 = Sunday … 6 = Saturday */
+export function istWeekdaySun0(d = new Date()): number {
+    return new Date(d.getTime() + IST_OFFSET_MS).getUTCDay();
+}
+
+/** Monday of the IST week containing `d` (YYYY-MM-DD) */
+export function mondayOfIstWeek(d = new Date()): string {
+    const ymd = ymdIst(d);
+    const dow = istWeekdaySun0(d);
+    const monOffset = dow === 0 ? -6 : 1 - dow;
+    return shiftYmdIst(ymd, monOffset);
+}
+
+function pad2(n: number): string {
+    return String(n).padStart(2, "0");
+}
+
+/** Inclusive IST day bounds (start 00:00, end 23:59:59.999). */
+export function istInclusiveDay(ymd: string): { start: Date; end: Date } {
+    return {
+        start: parseYmdStartIst(ymd),
+        end: parseYmdEndInclusiveIst(ymd),
+    };
+}
+
+/** Inclusive range from start YMD through end YMD (both IST calendar days). */
+export function istInclusiveRange(
+    startYmd: string,
+    endYmd: string
+): { start: Date; end: Date } {
+    return {
+        start: parseYmdStartIst(startYmd),
+        end: parseYmdEndInclusiveIst(endYmd),
+    };
+}
+
+/** First IST day of the month for a YYYY-MM-DD */
+export function firstOfIstMonth(ymd: string): string {
+    return `${ymd.slice(0, 7)}-01`;
+}
+
+export function prevIstMonthRange(ymd: string): { start: Date; end: Date } {
+    const [ys, ms] = ymd.split("-").map(Number);
+    const y = ys ?? 0;
+    const m = ms ?? 1;
+    const pm = m === 1 ? 12 : m - 1;
+    const py = m === 1 ? y - 1 : y;
+    const startYmd = `${py}-${pad2(pm)}-01`;
+    const thisMonthStart = parseYmdStartIst(firstOfIstMonth(ymd));
+    const lastYmd = ymdIst(new Date(thisMonthStart.getTime() - 1));
+    return istInclusiveRange(startYmd, lastYmd);
+}
+
 /** IST calendar month as YYYY-MM */
 export function istMonthYear(d = new Date()): string {
     return ymdIst(d).slice(0, 7);
