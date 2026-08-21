@@ -401,12 +401,13 @@ model SalaryRule {
     user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
     amount         Float
     frequency      SalaryFrequency
-    maxPayments    Int
+    maxPayments    Int?            @default(0)
     paidCount      Int             @default(0)
     startDate      DateTime
     nextPaymentAt  DateTime
     immediateFirst Boolean         @default(false)
     addToTurnover  Boolean         @default(false)
+    remark         String?
     isActive       Boolean         @default(true)
 
     payments SalaryPayment[]
@@ -421,12 +422,13 @@ model SalaryRule {
 }
 
 model SalaryPayment {
-    id           String     @id @default(uuid())
-    salaryRule   SalaryRule @relation(fields: [salaryRuleId], references: [id], onDelete: Cascade)
-    salaryRuleId String
+    id           String      @id @default(uuid())
+    salaryRule   SalaryRule? @relation(fields: [salaryRuleId], references: [id], onDelete: Cascade)
+    salaryRuleId String?
     userId       String
-    user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+    user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
     amount       Float
+    remark       String?
 
     createdAt DateTime @default(now())
 
@@ -438,6 +440,7 @@ model SalaryPayment {
 enum SalaryFrequency {
     HOURLY
     DAILY
+    WEEKLY
     MONTHLY
     ONE_TIME
 }

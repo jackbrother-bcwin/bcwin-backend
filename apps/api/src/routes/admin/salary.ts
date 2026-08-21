@@ -20,17 +20,19 @@ const SalaryRuleSchema = z.object({
     userId: z.string(),
     amount: z.number(),
     frequency: z.enum(SalaryFrequency),
-    maxPayments: z.number(),
+    maxPayments: z.number().nullable().optional(),
     paidCount: z.number(),
     startDate: z.string(),
     nextPaymentAt: z.string(),
     immediateFirst: z.boolean(),
     addToTurnover: z.boolean(),
+    remark: z.string().nullable().optional(),
     isActive: z.boolean(),
     createdAt: z.string(),
     updatedAt: z.string(),
     user: z
         .object({
+            id: z.string().optional(),
             serialNumber: z.number(),
             username: z.string(),
             mobileNumber: z.string(),
@@ -77,11 +79,17 @@ const listRulesRoute = createRoute({
     tags: ["admin"],
     summary: "List salary rules",
     description:
-        "Get a paginated list of salary rules, optionally filtered by user",
+        "Get a paginated list of salary rules, optionally filtered by user or status",
     request: {
         query: z.object({
             page,
             limit,
+            userId: z.string().optional().openapi({
+                description: "Filter by exact user UUID",
+            }),
+            status: z.enum(["ACTIVE", "STOPPED", "ALL"]).optional().openapi({
+                description: "Filter by rule status",
+            }),
             search: z.string().optional().openapi({
                 description:
                     "Search by user ID (serial number), username, or phone number",
@@ -115,7 +123,7 @@ const createRuleRoute = createRoute({
     method: "post",
     path: "/create",
     tags: ["admin"],
-    summary: "Create a salary rule",
+    summary: "Create a salary rule or give instant salary",
     description:
         "Create a new salary rule for a user or agent. Identify the user by providing any one of: userId (UUID), serialNumber, or number (mobile number).",
     request: {
@@ -144,13 +152,13 @@ const createRuleRoute = createRoute({
                                 description: "Payment frequency",
                                 example: SalaryFrequency.DAILY,
                             }),
-                            maxPayments: z.number().int().positive().openapi({
+                            maxPayments: z.number().int().positive().optional().openapi({
                                 description:
-                                    "Maximum number of payments before rule auto-deactivates",
+                                    "Optional max number of payments (leave blank for ongoing)",
                                 example: 30,
                             }),
-                            startDate: z.string().openapi({
-                                description: "Start date (ISO 8601)",
+                            startDate: z.string().optional().openapi({
+                                description: "Start date (ISO 8601, defaults to now)",
                                 example: "2025-10-22T00:00:00Z",
                             }),
                             immediateFirst: z
@@ -171,6 +179,10 @@ const createRuleRoute = createRoute({
                                         "Include salary payments in turnover/wager calculation",
                                     example: false,
                                 }),
+                            remark: z.string().optional().openapi({
+                                description: "Remark / note visible in user transaction history",
+                                example: "Weekly performance bonus",
+                            }),
                         })
                         .refine(
                             (data) =>
@@ -211,7 +223,7 @@ const updateRuleRoute = createRoute({
     path: "/:id",
     tags: ["admin"],
     summary: "Update a salary rule",
-    description: "Update an existing salary rule",
+    description: "Update an existing salary rule (amount, frequency, status, remark)",
     request: {
         params: z.object({
             id: z.string().openapi({ description: "Salary rule ID" }),
@@ -228,18 +240,22 @@ const updateRuleRoute = createRoute({
                             description: "Payment frequency",
                             example: SalaryFrequency.MONTHLY,
                         }),
-                        maxPayments: z.number().int().positive().optional().openapi({
+                        maxPayments: z.number().int().positive().nullable().optional().openapi({
                             description: "Maximum number of payments",
                             example: 12,
                         }),
                         isActive: z.boolean().optional().openapi({
-                            description: "Activate or deactivate the rule",
+                            description: "Activate or deactivate/stop the rule",
                             example: true,
                         }),
                         addToTurnover: z.boolean().optional().openapi({
                             description:
                                 "Include salary payments in turnover/wager calculation",
                             example: false,
+                        }),
+                        remark: z.string().nullable().optional().openapi({
+                            description: "Remark / note",
+                            example: "Updated salary note",
                         }),
                     }),
                 },
@@ -302,7 +318,7 @@ const formatRule = (r: any) => ({
     userId: r.userId,
     amount: r.amount,
     frequency: r.frequency,
-    maxPayments: r.maxPayments,
+    maxPayments: r.maxPayments ?? null,
     paidCount: r.paidCount,
     startDate:
         r.startDate instanceof Date ? r.startDate.toISOString() : r.startDate,
@@ -312,6 +328,7 @@ const formatRule = (r: any) => ({
             : r.nextPaymentAt,
     immediateFirst: r.immediateFirst,
     addToTurnover: r.addToTurnover,
+    remark: r.remark ?? null,
     isActive: r.isActive,
     createdAt:
         r.createdAt instanceof Date ? r.createdAt.toISOString() : r.createdAt,
@@ -319,6 +336,7 @@ const formatRule = (r: any) => ({
         r.updatedAt instanceof Date ? r.updatedAt.toISOString() : r.updatedAt,
     user: r.user
         ? {
+              id: r.user.id ?? r.userId,
               serialNumber: r.user.serialNumber,
               username: r.user.username,
               mobileNumber: r.user.mobileNumber,
@@ -337,6 +355,9 @@ function calculateNextPayment(
             break;
         case "DAILY":
             next.setDate(next.getDate() + 1);
+            break;
+        case "WEEKLY":
+            next.setDate(next.getDate() + 7);
             break;
         case "MONTHLY":
             next.setMonth(next.getMonth() + 1);
@@ -430,30 +451,35 @@ export const salaryRoutes = (app: OpenAPIHono) => {
     // List rules
     app.openapi(listRulesRoute, async (c) => {
         try {
-            const { page, limit, search } = c.req.valid("query");
+            const { page, limit, search, userId, status } = c.req.valid("query");
             const skip = (page - 1) * limit;
 
-            // Build user filter
-            let userFilter: any = undefined;
-            if (search) {
-                const serialNum = parseInt(search);
-                userFilter = {
-                    user: {
-                        OR: [
-                            ...(isNaN(serialNum)
-                                ? []
-                                : [{ serialNumber: serialNum }]),
-                            { username: { contains: search, mode: "insensitive" as const } },
-                            { mobileNumber: { contains: search } },
-                            { id: search },
-                        ],
-                    },
-                };
+            const where: any = {};
+
+            if (userId) {
+                where.userId = userId;
             }
 
-            const where = {
-                ...userFilter,
-            };
+            if (status === "ACTIVE") {
+                where.isActive = true;
+            } else if (status === "STOPPED") {
+                where.isActive = false;
+            }
+
+            // Build user search filter
+            if (search) {
+                const serialNum = parseInt(search);
+                where.user = {
+                    OR: [
+                        ...(isNaN(serialNum)
+                            ? []
+                            : [{ serialNumber: serialNum }]),
+                        { username: { contains: search, mode: "insensitive" as const } },
+                        { mobileNumber: { contains: search } },
+                        { id: search },
+                    ],
+                };
+            }
 
             const [rules, total] = await Promise.all([
                 prisma.salaryRule.findMany({
@@ -464,6 +490,7 @@ export const salaryRoutes = (app: OpenAPIHono) => {
                     include: {
                         user: {
                             select: {
+                                id: true,
                                 serialNumber: true,
                                 username: true,
                                 mobileNumber: true,
@@ -496,7 +523,7 @@ export const salaryRoutes = (app: OpenAPIHono) => {
         }
     });
 
-    // Create rule
+    // Create rule / Give instant salary
     app.openapi(createRuleRoute, async (c) => {
         try {
             const body = c.req.valid("json");
@@ -507,6 +534,7 @@ export const salaryRoutes = (app: OpenAPIHono) => {
                 startDate,
                 immediateFirst,
                 addToTurnover,
+                remark,
             } = body;
 
             // Resolve user from any provided identifier (userId, serialNumber, or number)
@@ -522,16 +550,16 @@ export const salaryRoutes = (app: OpenAPIHono) => {
 
             const userId = user.id;
 
-            // For ONE_TIME, force maxPayments to 1
-            const actualMaxPayments =
-                frequency === "ONE_TIME" ? 1 : maxPayments;
+            const isOneTime = frequency === "ONE_TIME";
+            const shouldPayImmediately = isOneTime || immediateFirst || false;
 
-            const start = new Date(startDate);
+            const actualMaxPayments = isOneTime ? 1 : (maxPayments ?? null);
+
+            const start = startDate ? new Date(startDate) : new Date();
             let nextPaymentAt: Date;
 
-            if (immediateFirst) {
-                // Next scheduled payment is after the first (which will be processed now)
-                nextPaymentAt = calculateNextPayment(new Date(), frequency);
+            if (shouldPayImmediately) {
+                nextPaymentAt = isOneTime ? start : calculateNextPayment(new Date(), frequency);
             } else {
                 nextPaymentAt = start;
             }
@@ -540,23 +568,22 @@ export const salaryRoutes = (app: OpenAPIHono) => {
             const result = await prisma.$transaction(async (tx) => {
                 const rule = await tx.salaryRule.create({
                     data: {
-                        userId,
+                        user: { connect: { id: userId } },
                         amount,
                         frequency: frequency as any,
-                        maxPayments: actualMaxPayments,
+                        maxPayments: actualMaxPayments ?? undefined,
                         startDate: start,
                         nextPaymentAt,
-                        immediateFirst,
+                        immediateFirst: shouldPayImmediately,
                         addToTurnover,
-                        paidCount: immediateFirst ? 1 : 0,
-                        isActive:
-                            immediateFirst && actualMaxPayments === 1
-                                ? false
-                                : true,
+                        remark: remark?.trim() || null,
+                        paidCount: shouldPayImmediately ? 1 : 0,
+                        isActive: isOneTime ? false : true,
                     },
                     include: {
                         user: {
                             select: {
+                                id: true,
                                 serialNumber: true,
                                 username: true,
                                 mobileNumber: true,
@@ -565,7 +592,7 @@ export const salaryRoutes = (app: OpenAPIHono) => {
                     },
                 });
 
-                if (immediateFirst) {
+                if (shouldPayImmediately) {
                     // Credit user balance
                     await tx.user.update({
                         where: { id: userId },
@@ -575,9 +602,10 @@ export const salaryRoutes = (app: OpenAPIHono) => {
                     // Record payment
                     await tx.salaryPayment.create({
                         data: {
-                            salaryRuleId: rule.id,
-                            userId,
+                            user: { connect: { id: userId } },
+                            salaryRule: { connect: { id: rule.id } },
                             amount,
+                            remark: remark?.trim() || null,
                         },
                     });
 
@@ -599,7 +627,7 @@ export const salaryRoutes = (app: OpenAPIHono) => {
             });
 
             // Send balance update via websocket if immediate payment was made
-            if (immediateFirst) {
+            if (shouldPayImmediately) {
                 const updatedUser = await prisma.user.findUnique({
                     where: { id: userId },
                     select: { balance: true },
@@ -625,13 +653,14 @@ export const salaryRoutes = (app: OpenAPIHono) => {
                 userId,
                 amount,
                 frequency,
+                remark,
             });
 
             return c.json(
                 {
                     success: true,
-                    message: immediateFirst
-                        ? "Salary rule created and first payment processed"
+                    message: shouldPayImmediately
+                        ? "Salary credited successfully"
                         : "Salary rule created successfully",
                     rule: formatRule(result),
                 },
@@ -675,6 +704,8 @@ export const salaryRoutes = (app: OpenAPIHono) => {
                 updateData.isActive = updates.isActive;
             if (updates.addToTurnover !== undefined)
                 updateData.addToTurnover = updates.addToTurnover;
+            if (updates.remark !== undefined)
+                updateData.remark = updates.remark?.trim() || null;
 
             const rule = await prisma.salaryRule.update({
                 where: { id },
@@ -682,6 +713,7 @@ export const salaryRoutes = (app: OpenAPIHono) => {
                 include: {
                     user: {
                         select: {
+                            id: true,
                             serialNumber: true,
                             username: true,
                             mobileNumber: true,
@@ -693,6 +725,7 @@ export const salaryRoutes = (app: OpenAPIHono) => {
             await Promise.all([
                 Cache.del(CacheKey.adminSalaryRules),
                 Cache.del(CacheKey.adminSalaryStats),
+                Cache.del(CacheKey.userSalaryHistory(existing.userId)),
             ]);
 
             logger.info("Salary rule updated", { id });
@@ -700,7 +733,11 @@ export const salaryRoutes = (app: OpenAPIHono) => {
             return c.json(
                 {
                     success: true,
-                    message: "Salary rule updated successfully",
+                    message: updates.isActive === false
+                        ? "Salary rule stopped"
+                        : updates.isActive === true
+                          ? "Salary rule activated"
+                          : "Salary rule updated successfully",
                     rule: formatRule(rule),
                 },
                 HTTP_STATUS.OK

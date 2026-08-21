@@ -15,6 +15,9 @@ function calculateNextPayment(fromDate: Date, frequency: string): Date {
         case "DAILY":
             next.setDate(next.getDate() + 1);
             break;
+        case "WEEKLY":
+            next.setDate(next.getDate() + 7);
+            break;
         case "MONTHLY":
             next.setMonth(next.getMonth() + 1);
             break;
@@ -87,8 +90,7 @@ export class SalaryScheduler {
     async processDuePayments(): Promise<void> {
         const now = new Date();
 
-        // Prisma doesn't support field-to-field comparison,
-        // so query by isActive + nextPaymentAt, then filter paidCount < maxPayments in JS
+        // Query by isActive + nextPaymentAt
         const candidates = await prisma.salaryRule.findMany({
             where: {
                 isActive: true,
@@ -96,8 +98,8 @@ export class SalaryScheduler {
             },
         });
 
-        const rulesToProcess = candidates.filter(
-            (r) => r.paidCount < r.maxPayments
+        const rulesToProcess = candidates.filter((r) =>
+            r.maxPayments && r.maxPayments > 0 ? r.paidCount < r.maxPayments : true
         );
 
         if (rulesToProcess.length === 0) {
@@ -120,9 +122,10 @@ export class SalaryScheduler {
                     // Record payment
                     await tx.salaryPayment.create({
                         data: {
-                            salaryRuleId: rule.id,
-                            userId: rule.userId,
+                            user: { connect: { id: rule.userId } },
+                            salaryRule: { connect: { id: rule.id } },
                             amount: rule.amount,
+                            remark: rule.remark,
                         },
                     });
 
@@ -140,14 +143,17 @@ export class SalaryScheduler {
                     }
 
                     const newPaidCount = rule.paidCount + 1;
-                    const isCompleted = newPaidCount >= rule.maxPayments;
+                    const isCompleted =
+                        rule.maxPayments && rule.maxPayments > 0
+                            ? newPaidCount >= rule.maxPayments
+                            : false;
 
                     // Update rule
                     await tx.salaryRule.update({
                         where: { id: rule.id },
                         data: {
                             paidCount: newPaidCount,
-                            isActive: isCompleted ? false : true,
+                            isActive: isCompleted ? false : rule.isActive,
                             nextPaymentAt: isCompleted
                                 ? rule.nextPaymentAt // keep as-is
                                 : calculateNextPayment(
@@ -170,6 +176,7 @@ export class SalaryScheduler {
                         amount: rule.amount,
                         paidCount: newPaidCount,
                         maxPayments: rule.maxPayments,
+                        remark: rule.remark,
                     });
                 });
 

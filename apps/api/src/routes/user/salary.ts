@@ -626,7 +626,7 @@ export const userSalaryRoutes = (app: OpenAPIHono) => {
                 }
             }
 
-            const [claims, total, approvedAgg, pendingAgg] = await Promise.all([
+            const [claims, total, approvedAgg, pendingAgg, manualPayments, manualAgg] = await Promise.all([
                 prisma.autoSalaryClaim.findMany({
                     where,
                     take: limit,
@@ -651,6 +651,36 @@ export const userSalaryRoutes = (app: OpenAPIHono) => {
                         status: "PENDING",
                         ...(where.periodDate
                             ? { periodDate: where.periodDate }
+                            : {}),
+                    },
+                    _sum: { amount: true },
+                    _count: { _all: true },
+                }),
+                prisma.salaryPayment.findMany({
+                    where: {
+                        userId: user.id,
+                        ...(startDate || endDate
+                            ? {
+                                  createdAt: {
+                                      ...(startDate ? { gte: new Date(startDate) } : {}),
+                                      ...(endDate ? { lte: new Date(endDate) } : {}),
+                                  },
+                              }
+                            : {}),
+                    },
+                    orderBy: { createdAt: "desc" },
+                    take: limit,
+                }),
+                prisma.salaryPayment.aggregate({
+                    where: {
+                        userId: user.id,
+                        ...(startDate || endDate
+                            ? {
+                                  createdAt: {
+                                      ...(startDate ? { gte: new Date(startDate) } : {}),
+                                      ...(endDate ? { lte: new Date(endDate) } : {}),
+                                  },
+                              }
                             : {}),
                     },
                     _sum: { amount: true },
@@ -684,9 +714,7 @@ export const userSalaryRoutes = (app: OpenAPIHono) => {
                 };
             });
 
-            // payments: ledger-friendly (transactions page). Prefer approved when
-            // onlyCredited; otherwise include all with status so UI can filter.
-            const payments = (
+            const autoPayments = (
                 onlyCredited
                     ? mapped.filter((c) => c.status === "APPROVED")
                     : mapped
@@ -702,8 +730,22 @@ export const userSalaryRoutes = (app: OpenAPIHono) => {
                 periodDate: c.periodDate,
             }));
 
-            const totalReceived = approvedAgg._sum.amount ?? 0;
+            const manualMapped = manualPayments.map((p) => ({
+                id: `manual-${p.id}`,
+                amount: p.amount,
+                createdAt: p.createdAt.toISOString(),
+                note: p.remark || "Salary credited by admin",
+                status: "APPROVED" as const,
+                periodDate: undefined,
+            }));
+
+            const payments = [...autoPayments, ...manualMapped].sort(
+                (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+            );
+
+            const totalReceived = (approvedAgg._sum.amount ?? 0) + (manualAgg._sum.amount ?? 0);
             const pendingTotal = pendingAgg._sum.amount ?? 0;
+            const totalCredits = (approvedAgg._count._all ?? 0) + (manualAgg._count._all ?? 0);
 
             const result = {
                 claims: mapped,
@@ -715,7 +757,7 @@ export const userSalaryRoutes = (app: OpenAPIHono) => {
                     totalReceived,
                     totalAmount: totalReceived,
                     pendingTotal,
-                    credits: approvedAgg._count._all,
+                    credits: totalCredits,
                     pendingCount: pendingAgg._count._all,
                 },
             };
