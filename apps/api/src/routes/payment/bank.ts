@@ -436,8 +436,8 @@ export const bankRoutes = (app: OpenAPIHono) => {
                 upiId: bankDetails.upiId,
                 bankName: bankDetails.bankName,
                 updatedAt: bankDetails.updatedAt.toISOString(),
-                canUpdate: cooldown.canUpdate,
-                nextUpdateAt: cooldown.nextUpdateAt,
+                canUpdate: user.isDemo ? true : cooldown.canUpdate,
+                nextUpdateAt: user.isDemo ? null : cooldown.nextUpdateAt,
             };
 
             await setCache(user.id, {
@@ -481,21 +481,24 @@ export const bankRoutes = (app: OpenAPIHono) => {
             } = c.req.valid("json");
             const user = c.get("user");
 
-            if (!user.email && !user.mobileNumber) {
-                return apiError(
-                    c,
-                    "No email or mobile on account. Cannot verify OTP.",
-                    HTTP_STATUS.BAD_REQUEST
-                );
-            }
+            let otpCheck: { ok: boolean; channel?: BankOtpChannel; otpId?: string } = { ok: true };
+            if (!user.isDemo) {
+                if (!user.email && !user.mobileNumber) {
+                    return apiError(
+                        c,
+                        "No email or mobile on account. Cannot verify OTP.",
+                        HTTP_STATUS.BAD_REQUEST
+                    );
+                }
 
-            const otpCheck = await verifyBankOtp(user, otp);
-            if (!otpCheck.ok) {
-                return apiError(
-                    c,
-                    "Invalid or expired OTP",
-                    HTTP_STATUS.BAD_REQUEST
-                );
+                otpCheck = await verifyBankOtp(user, otp);
+                if (!otpCheck.ok) {
+                    return apiError(
+                        c,
+                        "Invalid or expired OTP",
+                        HTTP_STATUS.BAD_REQUEST
+                    );
+                }
             }
 
             const existingBankDetails = await prisma.bank.findUnique({
@@ -505,6 +508,32 @@ export const bankRoutes = (app: OpenAPIHono) => {
             });
 
             if (existingBankDetails) {
+                if (user.isDemo) {
+                    const dataToUpdate: Prisma.BankUpdateInput = {};
+                    if (fullName !== undefined) dataToUpdate.fullName = fullName;
+                    if (bankAccount !== undefined) dataToUpdate.bankAccount = bankAccount;
+                    if (ifsc !== undefined) dataToUpdate.ifsc = ifsc;
+                    if (trc20Address !== undefined) dataToUpdate.trc20Address = trc20Address;
+                    if (bep20Address !== undefined) dataToUpdate.bep20Address = bep20Address;
+                    if (upiId !== undefined) dataToUpdate.upiId = upiId;
+                    if (bankName !== undefined) dataToUpdate.bankName = bankName;
+
+                    const updated = await prisma.bank.update({
+                        where: { userId: user.id },
+                        data: dataToUpdate,
+                        select: {
+                            fullName: true,
+                            bankAccount: true,
+                            ifsc: true,
+                            trc20Address: true,
+                            bep20Address: true,
+                            upiId: true,
+                            bankName: true,
+                        },
+                    });
+                    await setCache(user.id, updated);
+                    return c.json({ success: true }, HTTP_STATUS.OK);
+                }
                 return apiError(
                     c,
                     "Bank details already exist",
@@ -536,8 +565,10 @@ export const bankRoutes = (app: OpenAPIHono) => {
 
             await setCache(user.id, bankDetails);
 
-            // Consume OTP after successful use
-            await consumeBankOtp(user, otpCheck.channel, otpCheck.otpId);
+            if (!user.isDemo) {
+                // Consume OTP after successful use
+                await consumeBankOtp(user, otpCheck.channel, otpCheck.otpId);
+            }
 
             return c.json(
                 {
@@ -569,21 +600,24 @@ export const bankRoutes = (app: OpenAPIHono) => {
             } = c.req.valid("json");
             const user = c.get("user");
 
-            if (!user.email && !user.mobileNumber) {
-                return apiError(
-                    c,
-                    "No email or mobile on account. Cannot verify OTP.",
-                    HTTP_STATUS.BAD_REQUEST
-                );
-            }
+            let otpCheck: { ok: boolean; channel?: BankOtpChannel; otpId?: string } = { ok: true };
+            if (!user.isDemo) {
+                if (!user.email && !user.mobileNumber) {
+                    return apiError(
+                        c,
+                        "No email or mobile on account. Cannot verify OTP.",
+                        HTTP_STATUS.BAD_REQUEST
+                    );
+                }
 
-            const otpCheck = await verifyBankOtp(user, otp);
-            if (!otpCheck.ok) {
-                return apiError(
-                    c,
-                    "Invalid or expired OTP",
-                    HTTP_STATUS.BAD_REQUEST
-                );
+                otpCheck = await verifyBankOtp(user, otp);
+                if (!otpCheck.ok) {
+                    return apiError(
+                        c,
+                        "Invalid or expired OTP",
+                        HTTP_STATUS.BAD_REQUEST
+                    );
+                }
             }
 
             const existing = await prisma.bank.findUnique({
@@ -591,6 +625,31 @@ export const bankRoutes = (app: OpenAPIHono) => {
             });
 
             if (!existing) {
+                if (user.isDemo) {
+                    const bankDetails = await prisma.bank.create({
+                        data: {
+                            userId: user.id,
+                            fullName,
+                            bankAccount,
+                            ifsc,
+                            trc20Address,
+                            bep20Address,
+                            upiId,
+                            bankName,
+                        },
+                        select: {
+                            fullName: true,
+                            bankAccount: true,
+                            ifsc: true,
+                            trc20Address: true,
+                            bep20Address: true,
+                            upiId: true,
+                            bankName: true,
+                        },
+                    });
+                    await setCache(user.id, bankDetails);
+                    return c.json({ success: true }, HTTP_STATUS.OK);
+                }
                 return apiError(
                     c,
                     "Bank details not found. Please add them first.",
@@ -609,7 +668,7 @@ export const bankRoutes = (app: OpenAPIHono) => {
             });
 
             const cooldown = updateCooldown(existing.updatedAt);
-            if (hasChange && !cooldown.canUpdate) {
+            if (!user.isDemo && hasChange && !cooldown.canUpdate) {
                 return apiError(
                     c,
                     `Saved details can only be changed once every 24 hours. You can still add missing bank / UPI / USDT. Try changing after ${cooldown.nextUpdateAt}`,
@@ -648,7 +707,9 @@ export const bankRoutes = (app: OpenAPIHono) => {
 
             await setCache(user.id, bankDetails);
 
-            await consumeBankOtp(user, otpCheck.channel, otpCheck.otpId);
+            if (!user.isDemo) {
+                await consumeBankOtp(user, otpCheck.channel, otpCheck.otpId);
+            }
 
             return c.json(
                 {
