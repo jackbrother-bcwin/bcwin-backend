@@ -230,14 +230,17 @@ export const betRoutes = (app: OpenAPIHono) => {
                 balance: updatedUser.balance,
             });
 
-            WebSocketManager.publishToTopic("admin-moto-bets", {
-                betId: result.id,
-                userId: user.id,
-                periodId: result.periodId,
-                periodNumber: result.period.periodNumber,
-                betAmount: result.betAmount,
-                betStatus: result.status,
-            });
+            // Demo accounts are excluded from the admin live-bet feed
+            if (!user.isDemo) {
+                WebSocketManager.publishToTopic("admin-moto-bets", {
+                    betId: result.id,
+                    userId: user.id,
+                    periodId: result.periodId,
+                    periodNumber: result.period.periodNumber,
+                    betAmount: result.betAmount,
+                    betStatus: result.status,
+                });
+            }
 
             // Fire-and-forget: Check activity bonuses
             // checkAndCreateWeeklyBonuses(user.id); // WEEKLY_BONUS_ENABLED=false — re-enable later
