@@ -21,6 +21,10 @@ export const GetUsersQuerySchema = z.object({
         description: "Filter by user role",
         example: "USER",
     }),
+    isDemo: z.enum(["true", "false"]).optional().openapi({
+        description: "Filter by demo account status",
+        example: "false",
+    }),
 });
 
 // User item schema

@@ -42,8 +42,15 @@ const getUsersRoute = createRoute({
 export const listRoutes = (app: OpenAPIHono) => {
     app.openapi(getUsersRoute, async (c) => {
         try {
-            const { page, limit, search, isBanned, hasIllegalBetPenalty, role } =
-                c.req.valid("query");
+            const {
+                page,
+                limit,
+                search,
+                isBanned,
+                hasIllegalBetPenalty,
+                role,
+                isDemo,
+            } = c.req.valid("query");
             const skip = (page - 1) * limit;
 
             // Check cache using hash-based caching
@@ -52,7 +59,7 @@ export const listRoutes = (app: OpenAPIHono) => {
                 isBanned || "all"
             }-penalty:${hasIllegalBetPenalty || "all"}-role:${
                 role || "all"
-            }-page:${page}-limit:${limit}`;
+            }-demo:${isDemo || "all"}-page:${page}-limit:${limit}`;
 
             const cachedData = await Cache.hget<{
                 users: Array<{
@@ -107,6 +114,10 @@ export const listRoutes = (app: OpenAPIHono) => {
 
             if (role) {
                 where.role = role;
+            }
+
+            if (isDemo !== undefined) {
+                where.isDemo = isDemo === "true";
             }
 
             const [users, total] = await Promise.all([
