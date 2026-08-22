@@ -13,7 +13,7 @@
  *  9. Turnover row for a real USER uses SUCCESS deposits only.
  * 10. Top performance never lists staff / demo.
  * 11. User-hub team recharge walks only real USER downlines.
- * 12. Users list + deposit / withdraw queues stay unfiltered.
+ * 12. Deposit / withdraw finance queues filter out demo accounts by default, but allow them when querying by userId.
  */
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
@@ -51,6 +51,7 @@ const WD_GEN = 3300;
 const WD_FAIL = 3400;
 const WD_CANCEL = 3600;
 const WD_AGENT = 3500;
+const WD_DEMO = 3700;
 
 const WINGO_BET = 41;
 const WINGO_WIN = 80;
@@ -330,6 +331,13 @@ describe("Admin real-success summaries (ADR-0024)", () => {
                     status: "SUCCESS",
                     userId: agent.id,
                 },
+                {
+                    orderId: oid("wddm"),
+                    amount: WD_DEMO,
+                    method: "CXPAY",
+                    status: "SUCCESS",
+                    userId: demo.id,
+                },
             ],
         });
 
@@ -593,7 +601,7 @@ describe("Admin real-success summaries (ADR-0024)", () => {
         }
     });
 
-    test("deposit queue still lists pending and staff SUCCESS", async () => {
+    test("deposit queue lists real/staff deposits and hides demo deposits by default", async () => {
         await Cache.del(CacheKey.adminDeposits);
         const pending = await get("/api/v1/admin/transactions/deposit", {
             cookie: adminCookie,
@@ -616,9 +624,38 @@ describe("Admin real-success summaries (ADR-0024)", () => {
                 (r: { orderId: string }) => r.orderId === oid("adm")
             )
         ).toBe(true);
+
+        // General queue without userId hides demo deposits
+        const allQueue = await get("/api/v1/admin/transactions/deposit", {
+            cookie: adminCookie,
+            query: { page: 1, limit: 50 },
+        });
+        expect(allQueue.status).toBe(200);
+        expect(
+            (allQueue.json?.deposits ?? []).some(
+                (r: { orderId: string }) => r.orderId === oid("upi")
+            )
+        ).toBe(true);
+        expect(
+            (allQueue.json?.deposits ?? []).some(
+                (r: { orderId: string }) => r.orderId === oid("demo")
+            )
+        ).toBe(false);
+
+        // Explicit userId filter for demo user still shows demo deposits (User Hub)
+        const demoHub = await get("/api/v1/admin/transactions/deposit", {
+            cookie: adminCookie,
+            query: { page: 1, limit: 30, userId: demo.id },
+        });
+        expect(demoHub.status).toBe(200);
+        expect(
+            (demoHub.json?.deposits ?? []).some(
+                (r: { orderId: string }) => r.orderId === oid("demo")
+            )
+        ).toBe(true);
     });
 
-    test("withdraw queue still lists GENERATED and agent SUCCESS", async () => {
+    test("withdraw queue lists real/agent withdrawals and hides demo withdrawals by default", async () => {
         await Cache.del(CacheKey.adminWithdrawals);
         const gen = await get("/api/v1/admin/transactions/withdraw", {
             cookie: adminCookie,
@@ -639,6 +676,35 @@ describe("Admin real-success summaries (ADR-0024)", () => {
         expect(
             (agentRow.json?.withdrawals ?? []).some(
                 (r: { orderId: string }) => r.orderId === oid("wdag")
+            )
+        ).toBe(true);
+
+        // General queue without userId hides demo withdrawals
+        const allWdQueue = await get("/api/v1/admin/transactions/withdraw", {
+            cookie: adminCookie,
+            query: { page: 1, limit: 50 },
+        });
+        expect(allWdQueue.status).toBe(200);
+        expect(
+            (allWdQueue.json?.withdrawals ?? []).some(
+                (r: { orderId: string }) => r.orderId === oid("wdok")
+            )
+        ).toBe(true);
+        expect(
+            (allWdQueue.json?.withdrawals ?? []).some(
+                (r: { orderId: string }) => r.orderId === oid("wddm")
+            )
+        ).toBe(false);
+
+        // Explicit userId filter for demo user still shows demo withdrawals (User Hub)
+        const demoWdHub = await get("/api/v1/admin/transactions/withdraw", {
+            cookie: adminCookie,
+            query: { page: 1, limit: 30, userId: demo.id },
+        });
+        expect(demoWdHub.status).toBe(200);
+        expect(
+            (demoWdHub.json?.withdrawals ?? []).some(
+                (r: { orderId: string }) => r.orderId === oid("wddm")
             )
         ).toBe(true);
     });

@@ -215,7 +215,7 @@ export const withdrawRoutes = (app: OpenAPIHono) => {
 
             // Check cache using hash-based caching
             const mainCacheKey = CacheKey.adminWithdrawals;
-            const fieldKey = `v2-status:${status || "all"}-userId:${userId || "all"
+            const fieldKey = `v3-status:${status || "all"}-userId:${userId || "all"
                 }-method:${method || "all"}-page:${page}-limit:${limit}`;
 
             const cachedData = await Cache.hget<{
@@ -261,6 +261,8 @@ export const withdrawRoutes = (app: OpenAPIHono) => {
             }
             if (userId) {
                 where.userId = userId;
+            } else {
+                where.user = { isDemo: false };
             }
             if (method) {
                 where.method = method;

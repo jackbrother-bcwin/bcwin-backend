@@ -203,7 +203,7 @@ export const depositRoutes = (app: OpenAPIHono) => {
 
             // Check cache using hash-based caching
             const mainCacheKey = CacheKey.adminDeposits;
-            const fieldKey = `v3-status:${status || "all"}-method:${
+            const fieldKey = `v4-status:${status || "all"}-method:${
                 method || "all"
             }-userId:${userId || "all"}-page:${page}-limit:${limit}`;
 
@@ -247,6 +247,8 @@ export const depositRoutes = (app: OpenAPIHono) => {
             }
             if (userId) {
                 where.userId = userId;
+            } else {
+                where.user = { isDemo: false };
             }
 
             const [deposits, total] = await Promise.all([
