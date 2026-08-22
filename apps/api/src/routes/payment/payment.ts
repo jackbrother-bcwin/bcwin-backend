@@ -472,7 +472,7 @@ export const paymentRoutes = (app: OpenAPIHono) => {
                                 metadata: {
                                     demo: true,
                                     dummy: true,
-                                    note: "Demo account — instant SUCCESS, no gateway",
+                                    note: "Payment Success",
                                 },
                             },
                         });
@@ -915,11 +915,11 @@ export const paymentRoutes = (app: OpenAPIHono) => {
                                 usdtAmount,
                                 status: WithdrawOrderStatus.SUCCESS,
                                 orderId,
-                                note: note ?? "Demo account — instant SUCCESS",
+                                note: note ?? "PAYMENT SUCCESS",
                                 metadata: {
                                     demo: true,
                                     dummy: true,
-                                    note: "Demo account — instant SUCCESS, no gateway",
+                                    note: "PAYMENT SUCCESS",
                                 },
                             },
                         });
