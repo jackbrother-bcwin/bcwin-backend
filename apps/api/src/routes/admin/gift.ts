@@ -7,6 +7,7 @@ import { apiError, CommonResponses } from "@/lib/utils";
 import { authCookie, limit, page } from "@/schemas";
 import { Gift, prisma } from "@bcwin/db";
 import { Cache, CacheKey } from "@bcwin/cache";
+import { mintGiftCode } from "@/lib/giftCode";
 
 const logger = new Logger("admin-gift");
 
@@ -28,7 +29,7 @@ const GetGiftsResponseSchema = z.object({
             }),
             code: z.string().openapi({
                 description: "The code of the gift",
-                example: "123456",
+                example: "BCWIN0XK7M2Q9P4",
             }),
             amount: z.number().openapi({
                 description: "The amount of the gift",
@@ -129,7 +130,7 @@ const CreateGiftResponseSchema = z.object({
     }),
     code: z.string().openapi({
         description: "The redeemable code for the gift",
-        example: "123456",
+        example: "BCWIN0XK7M2Q9P4",
     }),
     totalRedeemable: z.number().openapi({
         description: "The total number of times the gift can be redeemed",
@@ -160,7 +161,7 @@ const UpdateGiftIsActiveResponseSchema = z.object({
         }),
         code: z.string().openapi({
             description: "The code of the gift",
-            example: "123456",
+            example: "BCWIN0XK7M2Q9P4",
         }),
         isActive: z.boolean().openapi({
             description: "The updated active status of the gift",
@@ -343,21 +344,21 @@ export const giftRoutes = (app: OpenAPIHono) => {
                 description,
             } = c.req.valid("json");
 
-            const giftCode = generateRandomToken();
-
-            await prisma.gift.create({
-                data: {
-                    amount,
-                    type,
-                    totalRedeemable,
-                    code: giftCode,
-                    totalRedeemed: 0,
-                    validTill,
-                    validFrom,
-                    isActive,
-                    title,
-                    description,
-                },
+            const giftCode = await mintGiftCode(async (code) => {
+                await prisma.gift.create({
+                    data: {
+                        amount,
+                        type,
+                        totalRedeemable,
+                        code,
+                        totalRedeemed: 0,
+                        validTill,
+                        validFrom,
+                        isActive,
+                        title,
+                        description,
+                    },
+                });
             });
 
             // Invalidate gifts cache when new gift is created
@@ -427,17 +428,4 @@ export const giftRoutes = (app: OpenAPIHono) => {
             );
         }
     });
-};
-
-const generateRandomToken = () => {
-    const date = new Date();
-
-    const time =
-        date.getUTCFullYear().toString() +
-        String(date.getUTCMonth() + 1).padStart(2, "0") +
-        String(date.getUTCDate()).padStart(2, "0");
-
-    const random = Math.floor(10000000000000 + Math.random() * 90000000000000);
-
-    return `${time}-${random}`;
 };

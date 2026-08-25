@@ -14,13 +14,14 @@ import {
     parseYmdStartIst,
     ymdIst,
 } from "@/lib/istDate";
+import { giftCodeLookupCandidates } from "@/lib/giftCode";
 
 const logger = new Logger("gift-redeem");
 
 const GiftRedeemSchema = z.object({
-    code: z.string().openapi({
+    code: z.string().min(1).openapi({
         description: "The code of the gift to redeem",
-        example: "123456",
+        example: "BCWIN0XK7M2Q9P4",
     }),
 });
 
@@ -102,13 +103,15 @@ const giftHistoryRoute = createRoute({
 export const giftRoutes = (app: OpenAPIHono) => {
     app.openapi(giftRedeemRoute, async (c) => {
         try {
-            const code = c.req.valid("json").code;
+            const candidates = giftCodeLookupCandidates(c.req.valid("json").code);
             const user = c.get("user");
 
-            const gift = await prisma.gift.findUnique({
-                where: {
-                    code,
-                },
+            if (candidates.length === 0) {
+                return apiError(c, "Gift not found", HTTP_STATUS.NOT_FOUND);
+            }
+
+            const gift = await prisma.gift.findFirst({
+                where: { code: { in: candidates } },
             });
 
             if (!gift) {
