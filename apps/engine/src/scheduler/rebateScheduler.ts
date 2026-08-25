@@ -1,6 +1,6 @@
 import cron, { ScheduledTask } from "node-cron";
 import Logger from "@bcwin/logger";
-import { RebateCalculator } from "@bcwin/rebate";
+import { DailyTeamRebate, shiftYmdIst, ymdIst } from "@bcwin/rebate";
 
 const logger = new Logger("rebate-scheduler");
 
@@ -11,9 +11,9 @@ export class RebateScheduler {
     start(): void {
         logger.info("Starting Rebate scheduler...");
 
-        // Daily at 01:30 Asia/Kolkata — credit all unsettled team rebates (ADR-0011)
+        // IST 00:00 — close the day that just ended (ADR-0036)
         this.task = cron.schedule(
-            "30 1 * * *",
+            "0 0 * * *",
             async () => {
                 if (this.isTaskRunning) {
                     logger.warn(
@@ -24,7 +24,8 @@ export class RebateScheduler {
 
                 this.isTaskRunning = true;
                 try {
-                    await RebateCalculator.settleAllUnsettledRebates();
+                    const closed = shiftYmdIst(ymdIst(), -1);
+                    await DailyTeamRebate.processClosedIstDay(closed);
                 } catch (error) {
                     logger.error("Error in rebate settlement:", error);
                 } finally {
@@ -39,7 +40,7 @@ export class RebateScheduler {
         this.task.start();
 
         logger.info(
-            "Rebate scheduler started. Daily settlement runs at 01:30 AM IST (rebate-only commission)."
+            "Rebate scheduler started. Closes the IST day at 00:00 (qualify level, credit Agent commission, reset rebateLevel to 0)."
         );
     }
 
@@ -66,7 +67,8 @@ export class RebateScheduler {
         this.isTaskRunning = true;
         try {
             logger.info("Running manual rebate settlement...");
-            await RebateCalculator.settleAllUnsettledRebates();
+            const closed = shiftYmdIst(ymdIst(), -1);
+            await DailyTeamRebate.processClosedIstDay(closed);
             logger.info("Manual rebate settlement completed.");
         } catch (error) {
             logger.error("Error in manual rebate settlement:", error);

@@ -86,8 +86,6 @@ export class VipLevelService {
             }
 
             const metrics = await this.getTeamMetrics(userId);
-            const qualifiedRebate =
-                await this.calculateRebateLevelFromMetrics(metrics);
             const qualifiedXp = await this.calculateXpVipLevel(userId);
 
             const existing = await prisma.userVipLevel.findUnique({
@@ -98,9 +96,10 @@ export class VipLevelService {
             const oldXp = existing?.currentLevel ?? 0;
             const oldRebate = existing?.rebateLevel ?? 0;
 
-            // Sticky high-water (ADR-0012 grilling)
+            // XP VIP stays sticky. Rebate level is a one-day badge (ADR-0036)
+            // written only by the 00:00 IST close job — do not restore lifetime.
             const xpLevel = Math.max(oldXp, qualifiedXp);
-            const rebateLevel = Math.max(oldRebate, qualifiedRebate);
+            const rebateLevel = oldRebate;
 
             await prisma.userVipLevel.upsert({
                 where: { userId },

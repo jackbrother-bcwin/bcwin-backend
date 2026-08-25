@@ -8,7 +8,7 @@ import { prisma } from "@bcwin/db";
 import { WebSocketManager } from "@bcwin/websocket";
 import { Cache, CacheKey } from "@bcwin/cache";
 import Inout, { ErrorCodes } from "@/lib/vendor/inout";
-import { RebateCalculator, SelfRebateCalculator } from "@bcwin/rebate";
+import { SelfRebateCalculator } from "@bcwin/rebate";
 import {
     checkAndCreateWeeklyBonuses,
     checkAndCreateDailyBonuses,
@@ -272,18 +272,7 @@ const handleBet = async (payload: any) => {
         CacheKey.inoutBets(user.id)
     );
 
-    // Team multi-level rebate (independent of commission)
-    RebateCalculator.calculateRebateForBet(
-        user.id,
-        betAmount,
-        "INOUT",
-        {
-            betId: betRow.id,
-            inoutCategory: game.category ?? null,
-        }
-    ).catch((err) =>
-        logger.error("Error calculating rebate:", err)
-    );
+    // Team Agent commission is priced at IST 24:00 (ADR-0036), not on place.
 
     // Self-rebate: 0.1% cashback (async, non-blocking)
     SelfRebateCalculator.accrueForBet({

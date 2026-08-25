@@ -4,6 +4,7 @@ import { zodErrorHook } from "@/lib/utils";
 import { rebateHistoryRoutes } from "./history";
 import { rebateRatesRoutes } from "./rates";
 import { rebateDailyRoutes } from "./daily";
+import { rebateDayPreviewRoutes } from "./dayPreview";
 import { selfRebateRoutes } from "./selfRebate";
 
 export const rebateRoutes = (app: OpenAPIHono) => {
@@ -12,6 +13,7 @@ export const rebateRoutes = (app: OpenAPIHono) => {
     rebateHistoryRoutes(rebateApp);
     rebateRatesRoutes(rebateApp);
     rebateDailyRoutes(rebateApp);
+    rebateDayPreviewRoutes(rebateApp);
     selfRebateRoutes(rebateApp);
 
     app.route("/rebate", rebateApp);

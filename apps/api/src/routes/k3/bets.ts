@@ -21,7 +21,7 @@ import {
 } from "@/schemas/k3";
 import { WebSocketManager } from "@bcwin/websocket";
 import { Cache, CacheKey } from "@bcwin/cache";
-import { RebateCalculator, SelfRebateCalculator } from "@bcwin/rebate";
+import { SelfRebateCalculator } from "@bcwin/rebate";
 import {
     checkAndCreateWeeklyBonuses,
     checkAndCreateDailyBonuses,
@@ -292,12 +292,7 @@ export const betRoutes = (app: OpenAPIHono) => {
                 });
             }
 
-            // Calculate rebate for this bet (async, non-blocking)
-            RebateCalculator.calculateRebateForBet(
-                user.id,
-                betAmount,
-                "K3"
-            ).catch((err) => logger.error("Error calculating rebate:", err));
+            // Team Agent commission is priced at IST 24:00 (ADR-0036), not on place.
 
             // Self-rebate: 0.1% cashback (async, non-blocking)
             SelfRebateCalculator.accrueForBet({
