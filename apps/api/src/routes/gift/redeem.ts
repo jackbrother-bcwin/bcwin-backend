@@ -8,6 +8,12 @@ import { authCookie } from "@/schemas";
 import { prisma } from "@bcwin/db";
 import { WebSocketManager } from "@bcwin/websocket";
 import { createWagerRequirement } from "@/lib/wagerEngine";
+import { GIFT_CLAIMS_PER_IST_DAY } from "@bcwin/config";
+import {
+    parseYmdEndExclusiveIst,
+    parseYmdStartIst,
+    ymdIst,
+} from "@/lib/istDate";
 
 const logger = new Logger("gift-redeem");
 
@@ -134,48 +140,66 @@ export const giftRoutes = (app: OpenAPIHono) => {
                 );
             }
 
-            const updatedUser = await prisma.user.update({
-                where: { id: user.id },
-                data: { balance: { increment: gift.amount } },
-                select: {
-                    balance: true,
-                },
-            });
+            const day = ymdIst();
+            const dayRange = {
+                gte: parseYmdStartIst(day),
+                lt: parseYmdEndExclusiveIst(day),
+            };
 
-            await createWagerRequirement(prisma, user.id, "REWARD", gift.amount, gift.id);
-
-            WebSocketManager.publishToUser(user.id, "account-balance", {
-                balance: updatedUser.balance,
-            });
-
-            const totalRedeemed = gift.totalRedeemed + 1;
-
-            if (totalRedeemed >= gift.totalRedeemable) {
-                await prisma.gift.update({
+            const result = await prisma.$transaction(async (tx) => {
+                const claimedToday = await tx.giftRedemption.count({
                     where: {
-                        id: gift.id,
-                    },
-                    data: {
-                        exaushted: true,
-                        totalRedeemed,
+                        userId: user.id,
+                        createdAt: dayRange,
                     },
                 });
-            } else {
-                await prisma.gift.update({
-                    where: {
-                        id: gift.id,
-                    },
+                if (claimedToday >= GIFT_CLAIMS_PER_IST_DAY) {
+                    return { capped: true as const };
+                }
+
+                const updatedUser = await tx.user.update({
+                    where: { id: user.id },
+                    data: { balance: { increment: gift.amount } },
+                    select: { balance: true },
+                });
+
+                await createWagerRequirement(
+                    tx,
+                    user.id,
+                    "REWARD",
+                    gift.amount,
+                    gift.id
+                );
+
+                const totalRedeemed = gift.totalRedeemed + 1;
+                await tx.gift.update({
+                    where: { id: gift.id },
                     data: {
                         totalRedeemed,
+                        exaushted: totalRedeemed >= gift.totalRedeemable,
                     },
                 });
+
+                await tx.giftRedemption.create({
+                    data: {
+                        userId: user.id,
+                        giftId: gift.id,
+                    },
+                });
+
+                return { capped: false as const, balance: updatedUser.balance };
+            });
+
+            if (result.capped) {
+                return apiError(
+                    c,
+                    "You can redeem up to 3 gift codes today. Come back tomorrow.",
+                    HTTP_STATUS.BAD_REQUEST
+                );
             }
 
-            await prisma.giftRedemption.create({
-                data: {
-                    userId: user.id,
-                    giftId: gift.id,
-                },
+            WebSocketManager.publishToUser(user.id, "account-balance", {
+                balance: result.balance,
             });
 
             return c.json(
