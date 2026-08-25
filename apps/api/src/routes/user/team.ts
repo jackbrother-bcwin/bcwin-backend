@@ -16,7 +16,10 @@ import {
     isValidYmd,
     parseYmdEndExclusiveIst,
     parseYmdStartIst,
+    shiftYmdIst,
+    ymdIst,
 } from "@/lib/istDate";
+import { sumRebateAmount } from "@/lib/rebateDayTotals";
 
 const logger = new Logger("commission-team");
 
@@ -342,6 +345,221 @@ const getTeamOverviewRoute = createRoute({
         ...CommonResponses.internalServerError(),
     },
 });
+
+const agencyHubResponseSchema = z.object({
+    success: z.boolean(),
+    data: z.object({
+        yesterday: teamOverviewSchema,
+        lifetime: teamOverviewSchema,
+        yesterdayCommission: z.number(),
+        weekCommission: z.number(),
+    }),
+});
+
+const getAgencyHubRoute = createRoute({
+    method: "get",
+    tags: ["user"],
+    path: "/team/hub",
+    summary: "Agency hub payload",
+    description:
+        "Yesterday Direct/Team card, lifetime headcount/income, yesterday commission, this-week rebate sum. One round trip.",
+    request: { cookies: authCookie },
+    responses: {
+        200: {
+            content: {
+                "application/json": { schema: agencyHubResponseSchema },
+            },
+            description: "OK",
+        },
+        ...CommonResponses.unauthorized(),
+        ...CommonResponses.internalServerError(),
+    },
+});
+
+type OverviewPayload = {
+    directTeamSize: number;
+    totalTeamSize: number;
+    totalTeamBetting: number;
+    totalTeamDeposit: number;
+    totalCommissionEarned: number;
+    directTeamBetting: number;
+    directTeamDeposit: number;
+    directDepositCount: number;
+    teamDepositCount: number;
+    directFirstDepositUsers: number;
+    teamFirstDepositUsers: number;
+};
+
+async function computeTeamOverview(
+    userId: string,
+    date?: string
+): Promise<OverviewPayload> {
+    let range: DateRange;
+    if (date) {
+        range = {
+            gte: parseYmdStartIst(date),
+            lt: parseYmdEndExclusiveIst(date),
+        };
+    }
+
+    const teamMembers = await getTeamMembers(userId);
+    const directMembers = teamMembers.filter((m) => m.layer === 1);
+
+    const inRange = (d: Date) =>
+        !range || (d >= range.gte && d < range.lt);
+
+    const registered = range
+        ? teamMembers.filter((m) => inRange(m.user.createdAt))
+        : teamMembers;
+    const registeredDirect = registered.filter((m) => m.layer === 1);
+
+    const memberIds = teamMembers.map((m) => m.user.id);
+    const directIds = directMembers.map((m) => m.user.id);
+    const createdAt = range ? { createdAt: range } : {};
+
+    const emptyDepAgg = {
+        _sum: { amount: 0 as number | null },
+        _count: 0,
+    };
+
+    const [
+        totalTeamBetting,
+        directTeamBetting,
+        deposits,
+        directDeposits,
+        commissionTotal,
+        firstsAll,
+        firstsDirect,
+    ] = await Promise.all([
+        memberIds.length
+            ? sumUserBetting({ in: memberIds }, range)
+            : Promise.resolve(0),
+        directIds.length
+            ? sumUserBetting({ in: directIds }, range)
+            : Promise.resolve(0),
+        memberIds.length
+            ? prisma.deposit.aggregate({
+                  where: {
+                      userId: { in: memberIds },
+                      status: "SUCCESS",
+                      ...createdAt,
+                  },
+                  _sum: { amount: true },
+                  _count: true,
+              })
+            : Promise.resolve(emptyDepAgg),
+        directIds.length
+            ? prisma.deposit.aggregate({
+                  where: {
+                      userId: { in: directIds },
+                      status: "SUCCESS",
+                      ...createdAt,
+                  },
+                  _sum: { amount: true },
+                  _count: true,
+              })
+            : Promise.resolve(emptyDepAgg),
+        prisma.rebate.aggregate({
+            where: {
+                userId,
+                settled: true,
+                ...createdAt,
+            },
+            _sum: { amount: true },
+        }),
+        memberIds.length
+            ? prisma.deposit.groupBy({
+                  by: ["userId"],
+                  where: {
+                      userId: { in: memberIds },
+                      status: "SUCCESS",
+                  },
+                  _min: { createdAt: true },
+              })
+            : Promise.resolve(
+                  [] as Array<{
+                      userId: string;
+                      _min: { createdAt: Date | null };
+                  }>
+              ),
+        directIds.length
+            ? prisma.deposit.groupBy({
+                  by: ["userId"],
+                  where: {
+                      userId: { in: directIds },
+                      status: "SUCCESS",
+                  },
+                  _min: { createdAt: true },
+              })
+            : Promise.resolve(
+                  [] as Array<{
+                      userId: string;
+                      _min: { createdAt: Date | null };
+                  }>
+              ),
+    ]);
+
+    const firstInWindow = (
+        rows: Array<{ _min: { createdAt: Date | null } }>
+    ) =>
+        rows.filter((r) => {
+            const t = r._min.createdAt;
+            return t != null && inRange(t);
+        }).length;
+
+    return {
+        directTeamSize: registeredDirect.length,
+        totalTeamSize: registered.length,
+        totalTeamBetting,
+        totalTeamDeposit: deposits._sum.amount || 0,
+        totalCommissionEarned: commissionTotal._sum.amount || 0,
+        directTeamBetting,
+        directTeamDeposit: directDeposits._sum.amount || 0,
+        directDepositCount: directDeposits._count || 0,
+        teamDepositCount: deposits._count || 0,
+        directFirstDepositUsers: firstInWindow(firstsDirect),
+        teamFirstDepositUsers: firstInWindow(firstsAll),
+    };
+}
+
+async function cachedTeamOverview(
+    userId: string,
+    date?: string
+): Promise<OverviewPayload> {
+    const cacheKey = date
+        ? `${CacheKey.teamOverview(userId)}:${date}`
+        : CacheKey.teamOverview(userId);
+    const cached = await Cache.get<OverviewPayload>(cacheKey);
+    if (cached) return cached;
+    const data = await computeTeamOverview(userId, date);
+    await Cache.set(cacheKey, data, 30);
+    if (!date) {
+        void prisma.teamMetrics
+            .upsert({
+                where: { userId },
+                update: {
+                    directTeamSize: data.directTeamSize,
+                    directTeamBetting: data.directTeamBetting,
+                    directTeamDeposit: data.directTeamDeposit,
+                    totalTeamSize: data.totalTeamSize,
+                    totalTeamBetting: data.totalTeamBetting,
+                    totalTeamDeposit: data.totalTeamDeposit,
+                    lastUpdated: new Date(),
+                },
+                create: {
+                    userId,
+                    directTeamSize: data.directTeamSize,
+                    directTeamBetting: data.directTeamBetting,
+                    directTeamDeposit: data.directTeamDeposit,
+                    totalTeamSize: data.totalTeamSize,
+                    totalTeamBetting: data.totalTeamBetting,
+                    totalTeamDeposit: data.totalTeamDeposit,
+                },
+            })
+            .catch((e) => logger.warn("Failed to upsert team metrics", e));
+    }
+    return data;
+}
 
 // Helper function to get team members recursively (excludes demo accounts)
 async function getTeamMembers(
@@ -686,216 +904,71 @@ export const teamRoutes = (app: OpenAPIHono) => {
         try {
             const user = c.get("user");
             const { date } = c.req.valid("query");
-
-            let range: DateRange;
-            if (date) {
-                if (!isValidYmd(date)) {
-                    return apiError(
-                        c,
-                        "Invalid date format. Use YYYY-MM-DD",
-                        HTTP_STATUS.BAD_REQUEST
-                    );
-                }
-                range = {
-                    gte: parseYmdStartIst(date),
-                    lt: parseYmdEndExclusiveIst(date),
-                };
-            }
-
-            const cacheKey = range
-                ? `${CacheKey.teamOverview(user.id)}:${date}`
-                : CacheKey.teamOverview(user.id);
-
-            type OverviewPayload = {
-                directTeamSize: number;
-                totalTeamSize: number;
-                totalTeamBetting: number;
-                totalTeamDeposit: number;
-                totalCommissionEarned: number;
-                directTeamBetting: number;
-                directTeamDeposit: number;
-                directDepositCount: number;
-                teamDepositCount: number;
-                directFirstDepositUsers: number;
-                teamFirstDepositUsers: number;
-            };
-
-            const cachedOverview = await Cache.get<OverviewPayload>(cacheKey);
-            if (cachedOverview) {
-                return c.json(
-                    {
-                        success: true,
-                        data: cachedOverview,
-                    },
-                    HTTP_STATUS.OK
+            if (date && !isValidYmd(date)) {
+                return apiError(
+                    c,
+                    "Invalid date format. Use YYYY-MM-DD",
+                    HTTP_STATUS.BAD_REQUEST
                 );
             }
-
-            const teamMembers = await getTeamMembers(user.id);
-            const directMembers = teamMembers.filter((m) => m.layer === 1);
-
-            const inRange = (d: Date) =>
-                !range || (d >= range.gte && d < range.lt);
-
-            const registered = range
-                ? teamMembers.filter((m) => inRange(m.user.createdAt))
-                : teamMembers;
-            const registeredDirect = registered.filter((m) => m.layer === 1);
-
-            const directTeamSize = registeredDirect.length;
-            const totalTeamSize = registered.length;
-
-            const memberIds = teamMembers.map((m) => m.user.id);
-            const directIds = directMembers.map((m) => m.user.id);
-            const createdAt = range ? { createdAt: range } : {};
-
-            const emptyDepAgg = {
-                _sum: { amount: 0 as number | null },
-                _count: 0,
-            };
-
-            const [
-                totalTeamBetting,
-                directTeamBetting,
-                deposits,
-                directDeposits,
-                commissionTotal,
-                firstsAll,
-                firstsDirect,
-            ] = await Promise.all([
-                memberIds.length
-                    ? sumUserBetting({ in: memberIds }, range)
-                    : Promise.resolve(0),
-                directIds.length
-                    ? sumUserBetting({ in: directIds }, range)
-                    : Promise.resolve(0),
-                memberIds.length
-                    ? prisma.deposit.aggregate({
-                          where: {
-                              userId: { in: memberIds },
-                              status: "SUCCESS",
-                              ...createdAt,
-                          },
-                          _sum: { amount: true },
-                          _count: true,
-                      })
-                    : Promise.resolve(emptyDepAgg),
-                directIds.length
-                    ? prisma.deposit.aggregate({
-                          where: {
-                              userId: { in: directIds },
-                              status: "SUCCESS",
-                              ...createdAt,
-                          },
-                          _sum: { amount: true },
-                          _count: true,
-                      })
-                    : Promise.resolve(emptyDepAgg),
-                prisma.rebate.aggregate({
-                    where: {
-                        userId: user.id,
-                        settled: true,
-                        ...createdAt,
-                    },
-                    _sum: { amount: true },
-                }),
-                memberIds.length
-                    ? prisma.deposit.groupBy({
-                          by: ["userId"],
-                          where: {
-                              userId: { in: memberIds },
-                              status: "SUCCESS",
-                          },
-                          _min: { createdAt: true },
-                      })
-                    : Promise.resolve(
-                          [] as Array<{
-                              userId: string;
-                              _min: { createdAt: Date | null };
-                          }>
-                      ),
-                directIds.length
-                    ? prisma.deposit.groupBy({
-                          by: ["userId"],
-                          where: {
-                              userId: { in: directIds },
-                              status: "SUCCESS",
-                          },
-                          _min: { createdAt: true },
-                      })
-                    : Promise.resolve(
-                          [] as Array<{
-                              userId: string;
-                              _min: { createdAt: Date | null };
-                          }>
-                      ),
-            ]);
-
-            const firstInWindow = (
-                rows: Array<{ _min: { createdAt: Date | null } }>
-            ) =>
-                rows.filter((r) => {
-                    const t = r._min.createdAt;
-                    return t != null && inRange(t);
-                }).length;
-
-            const finalData: OverviewPayload = {
-                directTeamSize,
-                totalTeamSize,
-                totalTeamBetting,
-                totalTeamDeposit: deposits._sum.amount || 0,
-                totalCommissionEarned: commissionTotal._sum.amount || 0,
-                directTeamBetting,
-                directTeamDeposit: directDeposits._sum.amount || 0,
-                directDepositCount: directDeposits._count || 0,
-                teamDepositCount: deposits._count || 0,
-                directFirstDepositUsers: firstInWindow(firstsDirect),
-                teamFirstDepositUsers: firstInWindow(firstsAll),
-            };
-
-            if (!range) {
-                void prisma.teamMetrics
-                    .upsert({
-                        where: { userId: user.id },
-                        update: {
-                            directTeamSize,
-                            directTeamBetting,
-                            directTeamDeposit: finalData.directTeamDeposit,
-                            totalTeamSize,
-                            totalTeamBetting,
-                            totalTeamDeposit: finalData.totalTeamDeposit,
-                            lastUpdated: new Date(),
-                        },
-                        create: {
-                            userId: user.id,
-                            directTeamSize,
-                            directTeamBetting,
-                            directTeamDeposit: finalData.directTeamDeposit,
-                            totalTeamSize,
-                            totalTeamBetting,
-                            totalTeamDeposit: finalData.totalTeamDeposit,
-                            lastUpdated: new Date(),
-                        },
-                    })
-                    .catch((e) =>
-                        logger.warn("Failed to upsert team metrics", e)
-                    );
-            }
-
-            await Cache.set(cacheKey, finalData, 30);
-
-            return c.json(
-                {
-                    success: true,
-                    data: finalData,
-                },
-                HTTP_STATUS.OK
-            );
+            const data = await cachedTeamOverview(user.id, date);
+            return c.json({ success: true, data }, HTTP_STATUS.OK);
         } catch (error) {
             logger.error("Error fetching team overview:", error);
             return apiError(
                 c,
                 "Failed to fetch team overview",
+                HTTP_STATUS.INTERNAL_SERVER_ERROR
+            );
+        }
+    });
+
+    app.openapi(getAgencyHubRoute, async (c) => {
+        try {
+            const user = c.get("user");
+            const hubKey = `user:${user.id}:agency-hub`;
+            const cached = await Cache.get<{
+                yesterday: OverviewPayload;
+                lifetime: OverviewPayload;
+                yesterdayCommission: number;
+                weekCommission: number;
+            }>(hubKey);
+            if (cached) {
+                return c.json({ success: true, data: cached }, HTTP_STATUS.OK);
+            }
+            const today = ymdIst();
+            const yest = shiftYmdIst(today, -1);
+            const weekStart = shiftYmdIst(today, -6);
+            const [lifetime, yesterday, yesterdayCommission, weekCommission] =
+                await Promise.all([
+                    cachedTeamOverview(user.id),
+                    cachedTeamOverview(user.id, yest),
+                    sumRebateAmount({
+                        userId: user.id,
+                        startYmd: yest,
+                        endYmd: yest,
+                        settled: true,
+                    }),
+                    sumRebateAmount({
+                        userId: user.id,
+                        startYmd: weekStart,
+                        endYmd: today,
+                        settled: "all",
+                    }),
+                ]);
+            const data = {
+                yesterday,
+                lifetime,
+                yesterdayCommission,
+                weekCommission,
+            };
+            await Cache.set(hubKey, data, 30);
+            return c.json({ success: true, data }, HTTP_STATUS.OK);
+        } catch (error) {
+            logger.error("Error fetching agency hub:", error);
+            return apiError(
+                c,
+                "Failed to fetch agency hub",
                 HTTP_STATUS.INTERNAL_SERVER_ERROR
             );
         }

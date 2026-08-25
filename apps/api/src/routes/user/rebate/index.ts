@@ -5,6 +5,7 @@ import { rebateHistoryRoutes } from "./history";
 import { rebateRatesRoutes } from "./rates";
 import { rebateDailyRoutes } from "./daily";
 import { rebateDayPreviewRoutes } from "./dayPreview";
+import { rebateDayTotalsRoutes } from "./dayTotals";
 import { selfRebateRoutes } from "./selfRebate";
 
 export const rebateRoutes = (app: OpenAPIHono) => {
@@ -14,6 +15,7 @@ export const rebateRoutes = (app: OpenAPIHono) => {
     rebateRatesRoutes(rebateApp);
     rebateDailyRoutes(rebateApp);
     rebateDayPreviewRoutes(rebateApp);
+    rebateDayTotalsRoutes(rebateApp);
     selfRebateRoutes(rebateApp);
 
     app.route("/rebate", rebateApp);

@@ -192,4 +192,38 @@ describe("Agency hub yesterday subordinate card (ADR-0025)", () => {
         });
         expect(res.status).toBe(400);
     });
+
+    test("hub Direct/Team card matches the two overview calls", async () => {
+        await Cache.del(`user:${parent.id}:agency-hub`);
+        const [hub, life, yestOv] = await Promise.all([
+            get("/api/v1/user/team/hub", { cookie }),
+            get("/api/v1/user/team/overview", { cookie }),
+            get("/api/v1/user/team/overview", {
+                cookie,
+                query: { date: yest },
+            }),
+        ]);
+        expect(hub.status).toBe(200);
+        const h = hub.json?.data ?? {};
+        const L = life.json?.data ?? {};
+        const Y = yestOv.json?.data ?? {};
+        for (const k of [
+            "directTeamSize",
+            "totalTeamSize",
+            "totalTeamDeposit",
+            "directTeamDeposit",
+            "directDepositCount",
+            "teamDepositCount",
+            "directFirstDepositUsers",
+            "teamFirstDepositUsers",
+            "totalCommissionEarned",
+        ] as const) {
+            expect(n(h.lifetime?.[k])).toBe(n(L[k]));
+            expect(n(h.yesterday?.[k])).toBe(n(Y[k]));
+        }
+        expect(n(h.yesterday.directTeamSize)).toBe(1);
+        expect(n(h.yesterday.totalTeamSize)).toBe(2);
+        expect(n(h.lifetime.directTeamSize)).toBe(2);
+        expect(n(h.lifetime.totalTeamSize)).toBe(3);
+    });
 });
