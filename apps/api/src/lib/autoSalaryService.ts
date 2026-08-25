@@ -1,8 +1,15 @@
+import { AUTO_SALARY_LIVE, AUTO_SALARY_PAUSED_MESSAGE } from "@bcwin/config";
 import { prisma } from "@bcwin/db";
 import Logger from "@bcwin/logger";
 import { WebSocketManager } from "@bcwin/websocket";
 import { Cache, CacheKey } from "@bcwin/cache";
 import { TeamMetricsCalculator } from "./teamMetricsCalculator";
+
+function ensureAutoSalaryLive(): void {
+    if (!AUTO_SALARY_LIVE) {
+        throw new Error(AUTO_SALARY_PAUSED_MESSAGE);
+    }
+}
 
 const logger = new Logger("auto-salary");
 
@@ -258,6 +265,7 @@ export type GenerateResult = {
 export async function generateAutoSalaries(
     periodYmd: string
 ): Promise<GenerateResult> {
+    ensureAutoSalaryLive();
     const { start, end, periodDate } = getIstDayRange(periodYmd);
 
     // Candidate parents: non-demo users who have ≥1 non-demo direct invite
@@ -378,6 +386,7 @@ export async function approveAutoSalaryClaim(
     claimId: string,
     adminId: string
 ): Promise<{ userId: string; amount: number; balance: number }> {
+    ensureAutoSalaryLive();
     const result = await prisma.$transaction(async (tx) => {
         const claim = await tx.autoSalaryClaim.findUnique({
             where: { id: claimId },
@@ -465,6 +474,7 @@ export async function rejectAutoSalaryClaim(
     adminId: string,
     reason?: string
 ): Promise<void> {
+    ensureAutoSalaryLive();
     const claim = await prisma.autoSalaryClaim.findUnique({
         where: { id: claimId },
     });

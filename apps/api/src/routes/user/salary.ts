@@ -18,6 +18,7 @@ import {
     type SalaryMetrics,
 } from "@/lib/autoSalaryService";
 import { TeamMetricsCalculator } from "@/lib/teamMetricsCalculator";
+import { rejectIfAutoSalaryPaused } from "@/lib/autoSalaryGate";
 
 const logger = new Logger("user-salary");
 
@@ -112,6 +113,7 @@ const getUserSalaryRoute = createRoute({
             description: "Auto-salary history",
         },
         ...CommonResponses.internalServerError(),
+        ...CommonResponses.serviceUnavailable(),
     },
 });
 
@@ -139,6 +141,7 @@ const salaryDashboardRoute = createRoute({
         },
         ...CommonResponses.unauthorized(),
         ...CommonResponses.internalServerError(),
+        ...CommonResponses.serviceUnavailable(),
     },
 });
 
@@ -356,6 +359,8 @@ function howtoSteps(metrics: SalaryMetrics) {
 
 export const userSalaryRoutes = (app: OpenAPIHono) => {
     app.openapi(salaryDashboardRoute, async (c) => {
+        const paused = rejectIfAutoSalaryPaused(c);
+        if (paused) return paused;
         try {
             const user = c.get("user");
             const cacheKey = `user:salary-dashboard:${user.id}`;
@@ -560,6 +565,10 @@ export const userSalaryRoutes = (app: OpenAPIHono) => {
                 c.req.valid("query");
             const skip = (page - 1) * limit;
             const onlyCredited = creditedOnly === "true";
+            if (!onlyCredited) {
+                const paused = rejectIfAutoSalaryPaused(c);
+                if (paused) return paused;
+            }
 
             const cacheKey = CacheKey.userSalaryHistory(user.id);
             const fieldKey = `v2-page:${page}-limit:${limit}-s:${startDate || "x"}-e:${endDate || "x"}-st:${status || "ALL"}-cr:${onlyCredited}`;

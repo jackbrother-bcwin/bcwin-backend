@@ -118,6 +118,14 @@ export const giftRoutes = (app: OpenAPIHono) => {
                 return apiError(c, "Gift not found", HTTP_STATUS.NOT_FOUND);
             }
 
+            if (!gift.isActive) {
+                return apiError(
+                    c,
+                    "This gift code is inactive",
+                    HTTP_STATUS.BAD_REQUEST
+                );
+            }
+
             if (gift.exaushted) {
                 return apiError(
                     c,

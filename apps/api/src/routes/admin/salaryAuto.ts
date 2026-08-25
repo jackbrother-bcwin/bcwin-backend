@@ -13,6 +13,7 @@ import {
     getIstDayRange,
     rejectAutoSalaryClaim,
 } from "@/lib/autoSalaryService";
+import { rejectIfAutoSalaryPaused } from "@/lib/autoSalaryGate";
 
 const logger = new Logger("admin-auto-salary");
 
@@ -113,6 +114,7 @@ const listSlabsRoute = createRoute({
             description: "Slabs listed",
         },
         ...CommonResponses.internalServerError(),
+        ...CommonResponses.serviceUnavailable(),
     },
 });
 
@@ -163,6 +165,7 @@ const generateRoute = createRoute({
         },
         ...CommonResponses.badRequest(),
         ...CommonResponses.internalServerError(),
+        ...CommonResponses.serviceUnavailable(),
     },
 });
 
@@ -207,6 +210,7 @@ const listClaimsRoute = createRoute({
         },
         ...CommonResponses.badRequest(),
         ...CommonResponses.internalServerError(),
+        ...CommonResponses.serviceUnavailable(),
     },
 });
 
@@ -237,6 +241,7 @@ const approveRoute = createRoute({
         },
         ...CommonResponses.badRequest(),
         ...CommonResponses.internalServerError(),
+        ...CommonResponses.serviceUnavailable(),
     },
 });
 
@@ -276,6 +281,7 @@ const rejectRoute = createRoute({
         },
         ...CommonResponses.badRequest(),
         ...CommonResponses.internalServerError(),
+        ...CommonResponses.serviceUnavailable(),
     },
 });
 
@@ -283,6 +289,8 @@ const rejectRoute = createRoute({
 
 export const autoSalaryRoutes = (app: OpenAPIHono) => {
     app.openapi(listSlabsRoute, async (c) => {
+        const paused = rejectIfAutoSalaryPaused(c);
+        if (paused) return paused;
         try {
             return c.json(
                 {
@@ -308,6 +316,8 @@ export const autoSalaryRoutes = (app: OpenAPIHono) => {
     });
 
     app.openapi(generateRoute, async (c) => {
+        const paused = rejectIfAutoSalaryPaused(c);
+        if (paused) return paused;
         try {
             const { periodDate } = c.req.valid("json");
             // Validate date early
@@ -340,6 +350,8 @@ export const autoSalaryRoutes = (app: OpenAPIHono) => {
     });
 
     app.openapi(listClaimsRoute, async (c) => {
+        const paused = rejectIfAutoSalaryPaused(c);
+        if (paused) return paused;
         try {
             const { page, limit, status, periodDate, search } =
                 c.req.valid("query");
@@ -424,6 +436,8 @@ export const autoSalaryRoutes = (app: OpenAPIHono) => {
     });
 
     app.openapi(approveRoute, async (c) => {
+        const paused = rejectIfAutoSalaryPaused(c);
+        if (paused) return paused;
         try {
             const { id } = c.req.valid("param");
             const admin = c.get("user");
@@ -461,6 +475,8 @@ export const autoSalaryRoutes = (app: OpenAPIHono) => {
     });
 
     app.openapi(rejectRoute, async (c) => {
+        const paused = rejectIfAutoSalaryPaused(c);
+        if (paused) return paused;
         try {
             const { id } = c.req.valid("param");
             const admin = c.get("user");
