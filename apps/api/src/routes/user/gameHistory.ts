@@ -55,7 +55,7 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
 
             // Check cache
             const mainCacheKey = CacheKey.gameHistory(user.id);
-            const fieldKey = `v2-major:${majorGameType || "all"}-page:${page}-limit:${limit}`;
+            const fieldKey = `v3-major:${majorGameType || "all"}-page:${page}-limit:${limit}`;
 
             const cachedData = await Cache.hget<{
                 data: Array<{
@@ -113,14 +113,21 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
             const shouldQueryInout =
                 !majorGameType || majorGameType === "INOUT";
 
-            // Build queries
+            // Window per table: newest skip+limit. Merge then slice — same
+            // order as loading every bet, without shipping the full history.
+            const windowSize = skip + limit;
+            const orderBy = { createdAt: "desc" as const };
+            const uid = { userId: user.id };
+
             const queries: Promise<any[]>[] = [];
+            const counts: Promise<number>[] = [];
 
             if (shouldQueryWingo) {
                 queries.push(
                     prisma.wingoBet.findMany({
-                        where: { userId: user.id },
-                        orderBy: { createdAt: "desc" },
+                        where: uid,
+                        orderBy,
+                        take: windowSize,
                         include: {
                             period: {
                                 select: {
@@ -132,13 +139,15 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                         },
                     })
                 );
+                counts.push(prisma.wingoBet.count({ where: uid }));
             }
 
             if (shouldQueryFiveD) {
                 queries.push(
                     prisma.fiveDBet.findMany({
-                        where: { userId: user.id },
-                        orderBy: { createdAt: "desc" },
+                        where: uid,
+                        orderBy,
+                        take: windowSize,
                         include: {
                             period: {
                                 select: {
@@ -149,13 +158,15 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                         },
                     })
                 );
+                counts.push(prisma.fiveDBet.count({ where: uid }));
             }
 
             if (shouldQueryK3) {
                 queries.push(
                     prisma.k3Bet.findMany({
-                        where: { userId: user.id },
-                        orderBy: { createdAt: "desc" },
+                        where: uid,
+                        orderBy,
+                        take: windowSize,
                         include: {
                             period: {
                                 select: {
@@ -166,13 +177,15 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                         },
                     })
                 );
+                counts.push(prisma.k3Bet.count({ where: uid }));
             }
 
             if (shouldQueryMoto) {
                 queries.push(
                     prisma.motoBet.findMany({
-                        where: { userId: user.id },
-                        orderBy: { createdAt: "desc" },
+                        where: uid,
+                        orderBy,
+                        take: windowSize,
                         include: {
                             period: {
                                 select: {
@@ -183,13 +196,15 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                         },
                     })
                 );
+                counts.push(prisma.motoBet.count({ where: uid }));
             }
 
             if (shouldQueryTrxWingo) {
                 queries.push(
                     prisma.trxWingoBet.findMany({
-                        where: { userId: user.id },
-                        orderBy: { createdAt: "desc" },
+                        where: uid,
+                        orderBy,
+                        take: windowSize,
                         include: {
                             period: {
                                 select: {
@@ -200,21 +215,25 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                         },
                     })
                 );
+                counts.push(prisma.trxWingoBet.count({ where: uid }));
             }
 
             if (shouldQueryInout) {
-                const inoutWhere: any = { userId: user.id };
-
                 queries.push(
                     prisma.inoutBet.findMany({
-                        where: inoutWhere,
-                        orderBy: { createdAt: "desc" },
+                        where: uid,
+                        orderBy,
+                        take: windowSize,
                     })
                 );
+                counts.push(prisma.inoutBet.count({ where: uid }));
             }
 
-            // Execute all queries in parallel
-            const results = await Promise.all(queries);
+            const [results, countRows] = await Promise.all([
+                Promise.all(queries),
+                Promise.all(counts),
+            ]);
+            const total = countRows.reduce((s, n) => s + n, 0);
 
             // Normalize all bets into a common format
             let allBets: Array<{
@@ -353,13 +372,10 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                 );
             }
 
-            // Sort by createdAt desc
             allBets.sort(
                 (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
             );
 
-            // Apply pagination
-            const total = allBets.length;
             const paginatedBets = allBets.slice(skip, skip + limit);
             const totalPages = Math.ceil(total / limit);
 
