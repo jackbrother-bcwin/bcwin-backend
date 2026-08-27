@@ -29,7 +29,7 @@ const GetGiftsResponseSchema = z.object({
             }),
             code: z.string().openapi({
                 description: "The code of the gift",
-                example: "BCWIN0XK7M2Q9P4",
+                example: "BCWIN0XK7M2Q9P4AB12CD34EF56GH78J",
             }),
             amount: z.number().openapi({
                 description: "The amount of the gift",
@@ -130,7 +130,7 @@ const CreateGiftResponseSchema = z.object({
     }),
     code: z.string().openapi({
         description: "The redeemable code for the gift",
-        example: "BCWIN0XK7M2Q9P4",
+        example: "BCWIN0XK7M2Q9P4AB12CD34EF56GH78J",
     }),
     totalRedeemable: z.number().openapi({
         description: "The total number of times the gift can be redeemed",
@@ -161,7 +161,7 @@ const UpdateGiftIsActiveResponseSchema = z.object({
         }),
         code: z.string().openapi({
             description: "The code of the gift",
-            example: "BCWIN0XK7M2Q9P4",
+            example: "BCWIN0XK7M2Q9P4AB12CD34EF56GH78J",
         }),
         isActive: z.boolean().openapi({
             description: "The updated active status of the gift",

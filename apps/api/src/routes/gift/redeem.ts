@@ -21,7 +21,7 @@ const logger = new Logger("gift-redeem");
 const GiftRedeemSchema = z.object({
     code: z.string().min(1).openapi({
         description: "The code of the gift to redeem",
-        example: "BCWIN0XK7M2Q9P4",
+        example: "BCWIN0XK7M2Q9P4AB12CD34EF56GH78J",
     }),
 });
 

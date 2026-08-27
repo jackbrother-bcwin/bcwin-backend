@@ -1,10 +1,12 @@
 /**
- * New gift codes: BCWIN0X + 8 A–Z/0–9. No hyphen.
- * Redeem trims and uppercases; hyphens stay so old YYYYMMDD-… codes still match.
+ * New gift codes: BCWIN0X + 25 A–Z/0–9 = 32 chars. No hyphen.
+ * Redeem trims and uppercases; hyphens stay so old YYYYMMDD-… and
+ * shorter BCWIN0X+8 codes still match as stored.
  */
 
 export const GIFT_CODE_PREFIX = "BCWIN0X";
-export const GIFT_CODE_SUFFIX_LEN = 8;
+export const GIFT_CODE_SUFFIX_LEN = 25;
+export const GIFT_CODE_LEN = GIFT_CODE_PREFIX.length + GIFT_CODE_SUFFIX_LEN;
 const ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const CREATE_ATTEMPTS = 8;
 
