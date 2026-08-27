@@ -180,4 +180,41 @@ describe("Daily team rebate (ADR-0036)", () => {
         });
         expect(after).toBe(before);
     });
+
+    test("Inout bets use catalog category (not default SLOTS)", async () => {
+        const mode = `${tracker.runId}_casino`;
+        await prisma.inoutGame.create({
+            data: {
+                title: "Test casino",
+                gameMode: mode,
+                description: "t",
+                category: "live casino",
+                icon: "x",
+                multiplayer: false,
+                rtp: 96,
+            },
+        });
+        const bettor = l1s[0]!;
+        const bet = await prisma.inoutBet.create({
+            data: {
+                userId: bettor.id,
+                token: bettor.id,
+                gameMode: mode,
+                betAmount: 100,
+                currency: "INR",
+                operator: "test",
+                transactionId: `${tracker.orderPrefix}io1`,
+                gameId: "g1",
+                winAmount: 0,
+                createdAt: new Date(range.gte.getTime() + 4 * 3600_000),
+            },
+        });
+        await DailyTeamRebate.processClosedIstDay(today);
+        const row = await prisma.rebate.findFirst({
+            where: { userId: parent.id, betId: bet.id },
+        });
+        expect(row?.gameCategory).toBe("CASINO");
+        await prisma.inoutBet.delete({ where: { id: bet.id } });
+        await prisma.inoutGame.deleteMany({ where: { gameMode: mode } });
+    });
 });

@@ -162,6 +162,7 @@ export class DailyTeamRebate {
         );
         const layerOf = new Map(members.map((m) => [m.userId, m.layer]));
         const usersByLayer = new Map<number, Set<string>>();
+        const rateCache = new Map<string, number>();
         for (const bet of bets) {
             const layer = layerOf.get(bet.bettorId);
             if (!layer) continue;
@@ -169,7 +170,12 @@ export class DailyTeamRebate {
                 bet.game,
                 bet.inoutCategory
             );
-            const rate = await this.rate(rebateLevel, category, layer);
+            const rate = await this.rate(
+                rebateLevel,
+                category,
+                layer,
+                rateCache
+            );
             const amt = bet.betAmount * (rate / 100);
             const key = `L${layer}`;
             const row = byLayer[key]!;
@@ -200,42 +206,17 @@ export class DailyTeamRebate {
     }
 
     /**
-     * Close IST day `ymd`: if unsettled rows already exist for that day
-     * (legacy on-place accrue), settle them. Otherwise create rows from
-     * that day's bets at that day's qualified level, then credit wallets.
-     * Then rebateLevel = 0 for everyone.
+     * Close IST day `ymd`: price that day's downline bets at that day's
+     * qualified level (starts 0 at 00:00, steps up as conditions clear).
+     * Skips (userId, betId) pairs that already have a row. Then credit
+     * wallets and set rebateLevel = 0.
      */
     static async processClosedIstDay(ymd: string): Promise<{
         created: number;
         settled: boolean;
     }> {
         const range = istDayRange(ymd);
-        const existingUnsettled = await prisma.rebate.count({
-            where: {
-                settled: false,
-                createdAt: { gte: range.gte, lt: range.lt },
-            },
-        });
-        const existingSettled = await prisma.rebate.count({
-            where: {
-                settled: true,
-                createdAt: { gte: range.gte, lt: range.lt },
-            },
-        });
-
-        let created = 0;
-        if (existingUnsettled === 0 && existingSettled === 0) {
-            created = await this.accrueClosedDay(range);
-        } else if (existingUnsettled === 0 && existingSettled > 0) {
-            logger.info(
-                `Day ${ymd} already settled (${existingSettled} rows); skip recreate`
-            );
-        } else {
-            logger.info(
-                `Day ${ymd} has ${existingUnsettled} legacy unsettled rows; settle only`
-            );
-        }
-
+        const created = await this.accrueClosedDay(range);
         await RebateCalculator.settleAllUnsettledRebates();
         await prisma.userVipLevel.updateMany({ data: { rebateLevel: 0 } });
         return { created, settled: true };
@@ -262,6 +243,7 @@ export class DailyTeamRebate {
         }
 
         let created = 0;
+        const rateCache = new Map<string, number>();
         for (const bet of bets) {
             const chain = await this.uplineIds(bet.bettorId, chainCache);
             const category = mapGameToRebateCategory(
@@ -276,7 +258,12 @@ export class DailyTeamRebate {
                 });
                 if (already) continue;
                 const level = levelByUpline.get(uplineId) ?? 0;
-                const rate = await this.rate(level, category, layer);
+                const rate = await this.rate(
+                    level,
+                    category,
+                    layer,
+                    rateCache
+                );
                 if (rate <= 0) continue;
                 const amount = bet.betAmount * (rate / 100);
                 if (amount <= 0) continue;
@@ -332,12 +319,18 @@ export class DailyTeamRebate {
     private static async rate(
         vipLevel: number,
         category: RebateGameCategory,
-        layer: number
+        layer: number,
+        cache?: Map<string, number>
     ): Promise<number> {
+        const cacheKey = `${vipLevel}:${category}:${layer}`;
+        if (cache?.has(cacheKey)) return cache.get(cacheKey)!;
         const config = await prisma.rebateRateConfig.findUnique({
             where: { vipLevel_category: { vipLevel, category } },
         });
-        if (!config) return 0;
+        if (!config) {
+            cache?.set(cacheKey, 0);
+            return 0;
+        }
         const key = `layer${layer}` as
             | "layer1"
             | "layer2"
@@ -345,7 +338,9 @@ export class DailyTeamRebate {
             | "layer4"
             | "layer5"
             | "layer6";
-        return Number(config[key] ?? 0);
+        const n = Number(config[key] ?? 0);
+        cache?.set(cacheKey, n);
+        return n;
     }
 
     private static async sumBetting(
@@ -426,7 +421,7 @@ export class DailyTeamRebate {
                     userId: true,
                     betAmount: true,
                     createdAt: true,
-                    gameId: true,
+                    gameMode: true,
                 },
             }),
         ]);
@@ -459,6 +454,15 @@ export class DailyTeamRebate {
         push(k, "K3");
         push(m, "MOTO");
         push(t, "TRXWINGO");
+        const modes = [...new Set(i.map((b) => b.gameMode).filter(Boolean))];
+        const catByMode = new Map<string, string>();
+        if (modes.length) {
+            const games = await prisma.inoutGame.findMany({
+                where: { gameMode: { in: modes } },
+                select: { gameMode: true, category: true },
+            });
+            for (const g of games) catByMode.set(g.gameMode, g.category);
+        }
         for (const b of i) {
             if (demo.has(b.userId) || b.betAmount <= 0) continue;
             out.push({
@@ -467,7 +471,7 @@ export class DailyTeamRebate {
                 game: "INOUT",
                 betId: b.id,
                 createdAt: b.createdAt,
-                inoutCategory: null,
+                inoutCategory: catByMode.get(b.gameMode) ?? null,
             });
         }
         return out;
