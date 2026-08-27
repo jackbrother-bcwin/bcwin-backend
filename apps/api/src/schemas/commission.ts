@@ -166,11 +166,13 @@ export const teamMemberSchema = z.object({
         example: 1,
     }),
     totalBetting: z.number().openapi({
-        description: "Total betting amount",
+        description:
+            "Stake (lottery + Inout not rolled back) for the query date IST day, or lifetime if date omitted",
         example: 5000,
     }),
     betCount: z.number().optional().openapi({
-        description: "Number of bets (lottery + inout) in the selected day/lifetime",
+        description:
+            "Number of those bets for the same window as totalBetting",
         example: 12,
     }),
     totalDeposit: z.number().openapi({

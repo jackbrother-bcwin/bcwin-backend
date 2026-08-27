@@ -83,22 +83,142 @@ async function sumUserBetting(
     );
 }
 
-async function countUserBets(
+type UserBetStat = { amount: number; count: number };
+type UserMoneyStat = { amount: number; count: number };
+
+const ID_CHUNK = 2000;
+
+function addBetStat(
+    map: Map<string, UserBetStat>,
     userId: string,
+    amount: number,
+    count: number
+) {
+    const prev = map.get(userId) ?? { amount: 0, count: 0 };
+    prev.amount += amount;
+    prev.count += count;
+    map.set(userId, prev);
+}
+
+/** One GROUP BY per game table — not 6+6 queries per card. */
+async function betStatsByUser(
+    userIds: string[],
     range?: DateRange
-): Promise<number> {
+): Promise<Map<string, UserBetStat>> {
+    const map = new Map<string, UserBetStat>();
+    if (userIds.length === 0) return map;
     const createdAt = range ? { createdAt: range } : {};
-    const [wingo, fiveD, k3, moto, trx, inout] = await Promise.all([
-        prisma.wingoBet.count({ where: { userId, ...createdAt } }),
-        prisma.fiveDBet.count({ where: { userId, ...createdAt } }),
-        prisma.k3Bet.count({ where: { userId, ...createdAt } }),
-        prisma.motoBet.count({ where: { userId, ...createdAt } }),
-        prisma.trxWingoBet.count({ where: { userId, ...createdAt } }),
-        prisma.inoutBet.count({
-            where: { userId, isRolledback: false, ...createdAt },
-        }),
-    ]);
-    return wingo + fiveD + k3 + moto + trx + inout;
+    for (let i = 0; i < userIds.length; i += ID_CHUNK) {
+        const slice = userIds.slice(i, i + ID_CHUNK);
+        const where = { userId: { in: slice }, ...createdAt };
+        const groups = await Promise.all([
+            prisma.wingoBet.groupBy({
+                by: ["userId"],
+                where,
+                _sum: { betAmount: true },
+                _count: { _all: true },
+            }),
+            prisma.fiveDBet.groupBy({
+                by: ["userId"],
+                where,
+                _sum: { betAmount: true },
+                _count: { _all: true },
+            }),
+            prisma.k3Bet.groupBy({
+                by: ["userId"],
+                where,
+                _sum: { betAmount: true },
+                _count: { _all: true },
+            }),
+            prisma.motoBet.groupBy({
+                by: ["userId"],
+                where,
+                _sum: { betAmount: true },
+                _count: { _all: true },
+            }),
+            prisma.trxWingoBet.groupBy({
+                by: ["userId"],
+                where,
+                _sum: { betAmount: true },
+                _count: { _all: true },
+            }),
+            prisma.inoutBet.groupBy({
+                by: ["userId"],
+                where: { ...where, isRolledback: false },
+                _sum: { betAmount: true },
+                _count: { _all: true },
+            }),
+        ]);
+        for (const rows of groups) {
+            for (const r of rows) {
+                addBetStat(
+                    map,
+                    r.userId,
+                    r._sum.betAmount || 0,
+                    r._count._all || 0
+                );
+            }
+        }
+    }
+    return map;
+}
+
+async function depositStatsByUser(
+    userIds: string[],
+    range?: DateRange
+): Promise<Map<string, UserMoneyStat>> {
+    const map = new Map<string, UserMoneyStat>();
+    if (userIds.length === 0) return map;
+    const createdAt = range ? { createdAt: range } : {};
+    for (let i = 0; i < userIds.length; i += ID_CHUNK) {
+        const slice = userIds.slice(i, i + ID_CHUNK);
+        const rows = await prisma.deposit.groupBy({
+            by: ["userId"],
+            where: {
+                userId: { in: slice },
+                status: "SUCCESS",
+                ...createdAt,
+            },
+            _sum: { amount: true },
+            _count: { _all: true },
+        });
+        for (const r of rows) {
+            map.set(r.userId, {
+                amount: r._sum.amount || 0,
+                count: r._count._all || 0,
+            });
+        }
+    }
+    return map;
+}
+
+async function rebateFromStats(
+    agentId: string,
+    fromUserIds: string[],
+    range?: DateRange
+): Promise<Map<string, number>> {
+    const map = new Map<string, number>();
+    if (fromUserIds.length === 0) return map;
+    const createdAt = range ? { createdAt: range } : {};
+    for (let i = 0; i < fromUserIds.length; i += ID_CHUNK) {
+        const slice = fromUserIds.slice(i, i + ID_CHUNK);
+        const rows = await prisma.rebate.groupBy({
+            by: ["fromUserId"],
+            where: {
+                userId: agentId,
+                fromUserId: { in: slice },
+                settled: true,
+                ...createdAt,
+            },
+            _sum: { amount: true },
+        });
+        for (const r of rows) {
+            if (r.fromUserId) {
+                map.set(r.fromUserId, r._sum.amount || 0);
+            }
+        }
+    }
+    return map;
 }
 
 const teamMembersResponseSchema = z.object({
@@ -135,143 +255,6 @@ const teamMembersResponseSchema = z.object({
         })
         .optional(),
 });
-
-/** Members who bet, deposited, or generated settled rebate in `range`. */
-async function memberIdsActiveOnDay(
-    memberIds: string[],
-    agentId: string,
-    range: NonNullable<DateRange>
-): Promise<Set<string>> {
-    if (memberIds.length === 0) return new Set();
-    const createdAt = { createdAt: range };
-    const [
-        wingo,
-        fiveD,
-        k3,
-        moto,
-        trx,
-        inout,
-        deposits,
-        rebates,
-    ] = await Promise.all([
-        prisma.wingoBet.findMany({
-            where: { userId: { in: memberIds }, ...createdAt },
-            select: { userId: true },
-            distinct: ["userId"],
-        }),
-        prisma.fiveDBet.findMany({
-            where: { userId: { in: memberIds }, ...createdAt },
-            select: { userId: true },
-            distinct: ["userId"],
-        }),
-        prisma.k3Bet.findMany({
-            where: { userId: { in: memberIds }, ...createdAt },
-            select: { userId: true },
-            distinct: ["userId"],
-        }),
-        prisma.motoBet.findMany({
-            where: { userId: { in: memberIds }, ...createdAt },
-            select: { userId: true },
-            distinct: ["userId"],
-        }),
-        prisma.trxWingoBet.findMany({
-            where: { userId: { in: memberIds }, ...createdAt },
-            select: { userId: true },
-            distinct: ["userId"],
-        }),
-        prisma.inoutBet.findMany({
-            where: {
-                userId: { in: memberIds },
-                isRolledback: false,
-                ...createdAt,
-            },
-            select: { userId: true },
-            distinct: ["userId"],
-        }),
-        prisma.deposit.findMany({
-            where: {
-                userId: { in: memberIds },
-                status: "SUCCESS",
-                ...createdAt,
-            },
-            select: { userId: true },
-            distinct: ["userId"],
-        }),
-        prisma.rebate.findMany({
-            where: {
-                userId: agentId,
-                fromUserId: { in: memberIds },
-                settled: true,
-                ...createdAt,
-            },
-            select: { fromUserId: true },
-            distinct: ["fromUserId"],
-        }),
-    ]);
-    const ids = new Set<string>();
-    for (const row of [
-        ...wingo,
-        ...fiveD,
-        ...k3,
-        ...moto,
-        ...trx,
-        ...inout,
-        ...deposits,
-    ]) {
-        ids.add(row.userId);
-    }
-    for (const row of rebates) {
-        if (row.fromUserId) ids.add(row.fromUserId);
-    }
-    return ids;
-}
-
-async function countBettors(
-    userIds: string[],
-    range?: DateRange
-): Promise<number> {
-    if (userIds.length === 0) return 0;
-    const createdAt = range ? { createdAt: range } : {};
-    const [w, f, k, m, t, i] = await Promise.all([
-        prisma.wingoBet.findMany({
-            where: { userId: { in: userIds }, ...createdAt },
-            select: { userId: true },
-            distinct: ["userId"],
-        }),
-        prisma.fiveDBet.findMany({
-            where: { userId: { in: userIds }, ...createdAt },
-            select: { userId: true },
-            distinct: ["userId"],
-        }),
-        prisma.k3Bet.findMany({
-            where: { userId: { in: userIds }, ...createdAt },
-            select: { userId: true },
-            distinct: ["userId"],
-        }),
-        prisma.motoBet.findMany({
-            where: { userId: { in: userIds }, ...createdAt },
-            select: { userId: true },
-            distinct: ["userId"],
-        }),
-        prisma.trxWingoBet.findMany({
-            where: { userId: { in: userIds }, ...createdAt },
-            select: { userId: true },
-            distinct: ["userId"],
-        }),
-        prisma.inoutBet.findMany({
-            where: {
-                userId: { in: userIds },
-                isRolledback: false,
-                ...createdAt,
-            },
-            select: { userId: true },
-            distinct: ["userId"],
-        }),
-    ]);
-    return new Set(
-        [...w, ...f, ...k, ...m, ...t, ...i].map((r) => r.userId)
-    ).size;
-}
 
 const teamOverviewResponseSchema = z.object({
     success: z.boolean().openapi({
@@ -639,9 +622,9 @@ export const teamRoutes = (app: OpenAPIHono) => {
                 };
             }
 
-            // Short cache (20s). v6 = 6-stat overview box support
+            // Short cache (20s). v10 = batched day stats (no per-card 14 queries)
             const mainCacheKey = CacheKey.teamMembers(user.id);
-            const fieldKey = `v9-layer:${layer || "all"}-username:${
+            const fieldKey = `v10-layer:${layer || "all"}-username:${
                 username || "all"
             }-date:${date || "all"}-page:${page}-limit:${limitNum}`;
 
@@ -717,17 +700,24 @@ export const teamRoutes = (app: OpenAPIHono) => {
                 );
             }
 
+            const rosterIds = filteredMembers.map((m) => m.user.id);
+            const [betMap, depMap, rebateMap] = await Promise.all([
+                betStatsByUser(rosterIds, dayRange),
+                depositStatsByUser(rosterIds, dayRange),
+                rebateFromStats(user.id, rosterIds, dayRange),
+            ]);
+
             // Date filter: only people who actually played/deposited/paid
             // rebate on that IST day — not the live roster (today's joins).
             if (dayRange) {
-                const active = await memberIdsActiveOnDay(
-                    filteredMembers.map((m) => m.user.id),
-                    user.id,
-                    dayRange
-                );
-                filteredMembers = filteredMembers.filter((m) =>
-                    active.has(m.user.id)
-                );
+                filteredMembers = filteredMembers.filter((m) => {
+                    const id = m.user.id;
+                    return (
+                        (betMap.get(id)?.count ?? 0) > 0 ||
+                        (depMap.get(id)?.count ?? 0) > 0 ||
+                        rebateMap.has(id)
+                    );
+                });
             }
 
             // Paginate
@@ -737,47 +727,15 @@ export const teamRoutes = (app: OpenAPIHono) => {
             );
             const total = filteredMembers.length;
             const totalPages = Math.max(1, Math.ceil(total / limitNum) || 1);
+            const filteredIds = filteredMembers.map((m) => m.user.id);
 
-            // Get statistics for each member (lifetime or single IST day)
-            const membersWithStats = await Promise.all(
-                paginatedMembers.map(async ({ user: member, layer: L }) => {
-                    const depositWhere: {
-                        userId: string;
-                        status: "SUCCESS";
-                        createdAt?: DateRange;
-                    } = {
-                        userId: member.id,
-                        status: "SUCCESS",
-                    };
-                    if (dayRange) depositWhere.createdAt = dayRange;
+            const isoCreated = (d: Date | string) =>
+                d instanceof Date ? d.toISOString() : String(d);
 
-                    // Same as TX: only settled team rebate (after 01:30 IST)
-                    const rebateWhere: {
-                        userId: string;
-                        fromUserId: string;
-                        settled: true;
-                        createdAt?: DateRange;
-                    } = {
-                        userId: user.id,
-                        fromUserId: member.id,
-                        settled: true,
-                    };
-                    if (dayRange) rebateWhere.createdAt = dayRange;
-
-                    const [totalBetting, betCount, deposits, rebatesFromMember] =
-                        await Promise.all([
-                            sumUserBetting(member.id, dayRange),
-                            countUserBets(member.id, dayRange),
-                            prisma.deposit.aggregate({
-                                where: depositWhere,
-                                _sum: { amount: true },
-                            }),
-                            prisma.rebate.aggregate({
-                                where: rebateWhere,
-                                _sum: { amount: true },
-                            }),
-                        ]);
-
+            const membersWithStats = paginatedMembers.map(
+                ({ user: member, layer: L }) => {
+                    const bets = betMap.get(member.id);
+                    const deps = depMap.get(member.id);
                     return {
                         id: member.id,
                         username: member.username,
@@ -785,52 +743,33 @@ export const teamRoutes = (app: OpenAPIHono) => {
                         email: member.email ?? undefined,
                         serialNumber: member.serialNumber,
                         layer: L,
-                        totalBetting,
-                        betCount,
-                        totalDeposit: deposits._sum.amount || 0,
-                        commissionGenerated:
-                            rebatesFromMember._sum.amount || 0,
-                        createdAt: member.createdAt.toISOString(),
+                        totalBetting: bets?.amount ?? 0,
+                        betCount: bets?.count ?? 0,
+                        totalDeposit: deps?.amount ?? 0,
+                        commissionGenerated: rebateMap.get(member.id) ?? 0,
+                        createdAt: isoCreated(member.createdAt),
                     };
-                })
+                }
             );
 
-            // Full-filter summary (not page-only) so FE stats match DB
-            const filteredIds = filteredMembers.map((m) => m.user.id);
-            const depositWhereBase: {
-                userId: { in: string[] };
-                status: "SUCCESS";
-                createdAt?: DateRange;
-            } = {
-                userId: { in: filteredIds },
-                status: "SUCCESS",
-            };
-            if (dayRange) depositWhereBase.createdAt = dayRange;
-
-            const [summaryBetting, summaryDep, depositors, bettors] =
-                await Promise.all([
-                    filteredIds.length
-                        ? sumUserBetting({ in: filteredIds }, dayRange)
-                        : Promise.resolve(0),
-                    filteredIds.length
-                        ? prisma.deposit.aggregate({
-                              where: depositWhereBase,
-                              _sum: { amount: true },
-                              _count: true,
-                          })
-                        : Promise.resolve({
-                              _sum: { amount: 0 as number | null },
-                              _count: 0,
-                          }),
-                    filteredIds.length
-                        ? prisma.deposit.findMany({
-                              where: depositWhereBase,
-                              select: { userId: true },
-                              distinct: ["userId"],
-                          })
-                        : Promise.resolve([] as { userId: string }[]),
-                    countBettors(filteredIds, dayRange),
-                ]);
+            let summaryBetting = 0;
+            let summaryDeposit = 0;
+            let summaryDepositCount = 0;
+            let depositors = 0;
+            let bettors = 0;
+            for (const id of filteredIds) {
+                const b = betMap.get(id);
+                if (b && b.count > 0) {
+                    summaryBetting += b.amount;
+                    bettors += 1;
+                }
+                const d = depMap.get(id);
+                if (d && d.count > 0) {
+                    summaryDeposit += d.amount;
+                    summaryDepositCount += d.count;
+                    depositors += 1;
+                }
+            }
 
             let firstDepositUsers = 0;
             let firstDepositAmount = 0;
@@ -871,10 +810,10 @@ export const teamRoutes = (app: OpenAPIHono) => {
                 totalPages,
                 summary: {
                     memberCount: total,
-                    depositCount: summaryDep._count || 0,
+                    depositCount: summaryDepositCount,
                     totalBetting: summaryBetting,
-                    totalDeposit: summaryDep._sum.amount || 0,
-                    depositors: depositors.length,
+                    totalDeposit: summaryDeposit,
+                    depositors,
                     bettors,
                     firstDepositUsers,
                     firstDepositAmount,
