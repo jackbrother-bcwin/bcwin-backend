@@ -119,6 +119,9 @@ describe("Daily team rebate (ADR-0036)", () => {
         const p = await DailyTeamRebate.previewForUser(parent.id, today);
         expect(p.rebateLevel).toBeGreaterThanOrEqual(1);
         expect(p.totalCommission).toBeGreaterThan(0);
+        expect(p.people.length).toBe(10);
+        const peopleSum = p.people.reduce((s, x) => s + x.commission, 0);
+        expect(peopleSum).toBeCloseTo(p.totalCommission, 3);
         const u = await prisma.user.findUnique({ where: { id: parent.id } });
         expect(Number(u?.balance ?? 0)).toBe(0);
     });

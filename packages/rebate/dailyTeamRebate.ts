@@ -19,6 +19,16 @@ export type DailyTeamMetrics = {
     teamDeposit: number;
 };
 
+export type DailyRebatePerson = {
+    fromUserId: string;
+    username: string;
+    serialNumber: number | null;
+    layer: number;
+    commission: number;
+    betVolume: number;
+    bets: number;
+};
+
 export type DailyRebatePreview = {
     rebateLevel: number;
     teamSize: number;
@@ -29,9 +39,28 @@ export type DailyRebatePreview = {
         string,
         { commission: number; bet: number; users: number }
     >;
+    people: DailyRebatePerson[];
 };
 
-type TeamMember = { userId: string; layer: number; createdAt: Date };
+export type DailyRebateBetItem = {
+    id: string;
+    fromUserId: string;
+    layer: number;
+    betAmount: number;
+    amount: number;
+    rate: number;
+    game: string;
+    createdAt: string;
+    settled: false;
+};
+
+type TeamMember = {
+    userId: string;
+    layer: number;
+    createdAt: Date;
+    username: string;
+    serialNumber: number | null;
+};
 
 type DayBet = {
     bettorId: string;
@@ -94,13 +123,20 @@ export class DailyTeamRebate {
                     referredBy: { in: codes.map((c) => c.referralCode) },
                     isDemo: false,
                 },
-                select: { id: true, createdAt: true },
+                select: {
+                    id: true,
+                    createdAt: true,
+                    username: true,
+                    serialNumber: true,
+                },
             });
             for (const u of next) {
                 out.push({
                     userId: u.id,
                     layer,
                     createdAt: u.createdAt,
+                    username: u.username,
+                    serialNumber: u.serialNumber,
                 });
             }
             current = next.map((u) => u.id);
@@ -153,19 +189,36 @@ export class DailyTeamRebate {
             byLayer[`L${i}`] = { commission: 0, bet: 0, users: 0 };
         }
         let totalCommission = 0;
+        const emptyPeople: DailyRebatePerson[] = [];
         if (members.length === 0) {
-            return { rebateLevel, ...metrics, totalCommission, byLayer };
+            return {
+                rebateLevel,
+                ...metrics,
+                totalCommission,
+                byLayer,
+                people: emptyPeople,
+            };
         }
         const bets = await this.loadBets(
             range,
             members.map((m) => m.userId)
         );
-        const layerOf = new Map(members.map((m) => [m.userId, m.layer]));
+        const memberOf = new Map(members.map((m) => [m.userId, m]));
         const usersByLayer = new Map<number, Set<string>>();
+        const byPerson = new Map<
+            string,
+            {
+                layer: number;
+                commission: number;
+                betVolume: number;
+                bets: number;
+            }
+        >();
         const rateCache = new Map<string, number>();
         for (const bet of bets) {
-            const layer = layerOf.get(bet.bettorId);
-            if (!layer) continue;
+            const member = memberOf.get(bet.bettorId);
+            if (!member) continue;
+            const layer = member.layer;
             const category = mapGameToRebateCategory(
                 bet.game,
                 bet.inoutCategory
@@ -184,10 +237,34 @@ export class DailyTeamRebate {
             totalCommission += amt;
             if (!usersByLayer.has(layer)) usersByLayer.set(layer, new Set());
             usersByLayer.get(layer)!.add(bet.bettorId);
+            const prev = byPerson.get(bet.bettorId) ?? {
+                layer,
+                commission: 0,
+                betVolume: 0,
+                bets: 0,
+            };
+            prev.commission += amt;
+            prev.betVolume += bet.betAmount;
+            prev.bets += 1;
+            byPerson.set(bet.bettorId, prev);
         }
         for (const [layer, set] of usersByLayer) {
             byLayer[`L${layer}`]!.users = set.size;
         }
+        const people: DailyRebatePerson[] = [...byPerson.entries()]
+            .map(([id, p]) => {
+                const m = memberOf.get(id);
+                return {
+                    fromUserId: id,
+                    username: m?.username ?? "—",
+                    serialNumber: m?.serialNumber ?? null,
+                    layer: p.layer,
+                    commission: round3(p.commission),
+                    betVolume: round3(p.betVolume),
+                    bets: p.bets,
+                };
+            })
+            .sort((a, b) => b.commission - a.commission);
         return {
             rebateLevel,
             ...metrics,
@@ -202,7 +279,212 @@ export class DailyTeamRebate {
                     },
                 ])
             ),
+            people,
         };
+    }
+
+    /** Paginated live today bets for one downline (not Rebate rows). */
+    static async previewBetsForPerson(
+        agentId: string,
+        ymd: string,
+        fromUserId: string,
+        page: number,
+        limit: number
+    ): Promise<{
+        items: DailyRebateBetItem[];
+        total: number;
+        currentPage: number;
+        totalPages: number;
+    }> {
+        const range = istDayRange(ymd);
+        const members = await this.teamMembers(agentId);
+        const member = members.find((m) => m.userId === fromUserId);
+        if (!member) {
+            return { items: [], total: 0, currentPage: 1, totalPages: 1 };
+        }
+        const metrics = await this.metricsForDay(agentId, range, members);
+        const rebateLevel = await this.qualifyLevel(metrics);
+        const bets = await this.loadBets(range, [fromUserId]);
+        bets.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+        const rateCache = new Map<string, number>();
+        const priced: DailyRebateBetItem[] = [];
+        for (const bet of bets) {
+            const category = mapGameToRebateCategory(
+                bet.game,
+                bet.inoutCategory
+            );
+            const rate = await this.rate(
+                rebateLevel,
+                category,
+                member.layer,
+                rateCache
+            );
+            const amt = bet.betAmount * (rate / 100);
+            priced.push({
+                id: bet.betId,
+                fromUserId,
+                layer: member.layer,
+                betAmount: round3(bet.betAmount),
+                amount: round3(amt),
+                rate,
+                game: bet.game,
+                createdAt: bet.createdAt.toISOString(),
+                settled: false,
+            });
+        }
+        const total = priced.length;
+        const totalPages = Math.max(1, Math.ceil(total / limit) || 1);
+        const currentPage = Math.min(Math.max(1, page), totalPages);
+        const skip = (currentPage - 1) * limit;
+        return {
+            items: priced.slice(skip, skip + limit),
+            total,
+            currentPage,
+            totalPages,
+        };
+    }
+
+    /**
+     * Expand-a-person rows: live today preview bets (if range includes today)
+     * then settled Rebate rows for the rest of the range. No double-count of today.
+     */
+    static async personBetsForAgent(
+        agentId: string,
+        opts: {
+            fromUserId: string;
+            startYmd?: string;
+            endYmd?: string;
+            page: number;
+            limit: number;
+            layer?: number;
+        }
+    ): Promise<{
+        items: Array<DailyRebateBetItem | {
+            id: string;
+            fromUserId: string;
+            layer: number;
+            betAmount: number;
+            amount: number;
+            rate: number;
+            game: string;
+            createdAt: string;
+            settled: boolean;
+        }>;
+        total: number;
+        currentPage: number;
+        totalPages: number;
+    }> {
+        const today = ymdIst();
+        const end = opts.endYmd;
+        const start = opts.startYmd;
+        const includesToday = !end || end >= today;
+        const todayOnly = start === today && (!end || end === today);
+
+        type Row = {
+            id: string;
+            fromUserId: string;
+            layer: number;
+            betAmount: number;
+            amount: number;
+            rate: number;
+            game: string;
+            createdAt: string;
+            settled: boolean;
+        };
+
+        let live: DailyRebateBetItem[] = [];
+        if (includesToday) {
+            const all = await this.previewBetsForPerson(
+                agentId,
+                today,
+                opts.fromUserId,
+                1,
+                500
+            );
+            live = all.items;
+            if (opts.layer != null) {
+                live = live.filter((r) => r.layer === opts.layer);
+            }
+        }
+
+        const histWhere: {
+            userId: string;
+            fromUserId: string;
+            settled: true;
+            layer?: number;
+            createdAt?: { gte?: Date; lt?: Date };
+        } = {
+            userId: agentId,
+            fromUserId: opts.fromUserId,
+            settled: true,
+        };
+        if (opts.layer != null) histWhere.layer = opts.layer;
+        if (todayOnly) {
+            // today is live-only
+        } else if (includesToday) {
+            histWhere.createdAt = {
+                ...(start ? { gte: istDayRange(start).gte } : {}),
+                lt: istDayRange(today).gte,
+            };
+        } else if (start || end) {
+            histWhere.createdAt = {
+                ...(start ? { gte: istDayRange(start).gte } : {}),
+                ...(end ? { lt: istDayRange(end).lt } : {}),
+            };
+        }
+
+        const histTotal = todayOnly
+            ? 0
+            : await prisma.rebate.count({ where: histWhere });
+        const total = live.length + histTotal;
+        const totalPages = Math.max(1, Math.ceil(total / opts.limit) || 1);
+        const currentPage = Math.min(Math.max(1, opts.page), totalPages);
+        const skip = (currentPage - 1) * opts.limit;
+
+        const items: Row[] = [];
+        if (skip < live.length) {
+            items.push(
+                ...live.slice(skip, skip + opts.limit).map((r) => ({
+                    ...r,
+                    settled: false as const,
+                }))
+            );
+        }
+        const need = opts.limit - items.length;
+        if (need > 0 && !todayOnly) {
+            const histSkip = Math.max(0, skip - live.length);
+            const hist = await prisma.rebate.findMany({
+                where: histWhere,
+                orderBy: { createdAt: "desc" },
+                skip: histSkip,
+                take: need,
+                select: {
+                    id: true,
+                    fromUserId: true,
+                    layer: true,
+                    betAmount: true,
+                    amount: true,
+                    rate: true,
+                    game: true,
+                    createdAt: true,
+                    settled: true,
+                },
+            });
+            for (const r of hist) {
+                items.push({
+                    id: r.id,
+                    fromUserId: r.fromUserId ?? opts.fromUserId,
+                    layer: r.layer ?? 0,
+                    betAmount: Number(r.betAmount ?? 0),
+                    amount: Number(r.amount ?? 0),
+                    rate: Number(r.rate ?? 0),
+                    game: r.game,
+                    createdAt: r.createdAt.toISOString(),
+                    settled: r.settled,
+                });
+            }
+        }
+        return { items, total, currentPage, totalPages };
     }
 
     /**
