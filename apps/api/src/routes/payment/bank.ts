@@ -6,6 +6,10 @@ import { apiError, CommonResponses } from "@/lib/utils";
 import { HTTP_STATUS } from "@/lib/http";
 import { authCookie } from "@/schemas";
 import { Cache, CacheKey } from "@bcwin/cache";
+import {
+    bankDetailsFields,
+    classifyBankWrite,
+} from "@/schemas/bankDetails";
 
 const logger = new Logger("bank");
 
@@ -16,69 +20,6 @@ const createBankRoute = <T extends RouteConfig>(config: T) => {
     });
 };
 
-const fullName = z.string().min(3).max(20).optional().nullable().openapi({
-    description: "The full name of the account holder",
-    example: "John Doe",
-});
-
-const bankAccount = z.string().min(8).max(20).optional().nullable().openapi({
-    description: "The account number",
-    example: "1234567890",
-});
-
-const ifsc = z.string().min(6).max(15).optional().nullable().openapi({
-    description: "The IFSC code",
-    example: "HDFC0000001",
-});
-
-const trc20Address = z
-    .string()
-    .optional()
-    .nullable()
-    .refine(
-        (v) => {
-            if (v == null || v === "") return true;
-            const s = v.trim();
-            return /^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(s);
-        },
-        {
-            message: "Invalid TRC20 address — must start with T (34 chars)",
-        }
-    )
-    .openapi({
-        description: "TRC20 USDT wallet address",
-        example: "TRWdq1fs8DhMR8EMJX2iD5qp5jaPuaVyaR",
-    });
-
-const bep20Address = z
-    .string()
-    .optional()
-    .nullable()
-    .refine(
-        (v) => {
-            if (v == null || v === "") return true;
-            const s = v.trim();
-            return /^0x[a-fA-F0-9]{40}$/.test(s);
-        },
-        {
-            message: "Invalid BEP20 address — must start with 0x (42 chars)",
-        }
-    )
-    .openapi({
-        description: "BEP20 USDT wallet address",
-        example: "0x1234567890abcdef1234567890abcdef12345678",
-    });
-
-const upiId = z.string().optional().nullable().openapi({
-    description: "The UPI ID",
-    example: "john.doe@upi",
-});
-
-const bankName = z.string().min(2).max(120).optional().nullable().openapi({
-    description: "Bank name",
-    example: "STATE BANK OF INDIA",
-});
-
 const otpCode = z.coerce
     .string()
     .regex(/^\d{6}$/, "OTP must be a 6-digit number")
@@ -88,13 +29,7 @@ const otpCode = z.coerce
     });
 
 const PostBankSchema = z.object({
-    fullName,
-    bankAccount,
-    ifsc,
-    trc20Address,
-    bep20Address,
-    upiId,
-    bankName,
+    ...bankDetailsFields,
     otp: otpCode,
 });
 
@@ -105,13 +40,7 @@ const GetBankResponseSchema = z.object({
     }),
     data: z
         .object({
-            fullName,
-            bankAccount,
-            ifsc,
-            trc20Address,
-            bep20Address,
-            upiId,
-            bankName,
+            ...bankDetailsFields,
             updatedAt: z.string().datetime().optional().nullable().openapi({
                 description: "Last time bank details were saved/updated (ISO)",
             }),
@@ -358,42 +287,6 @@ function updateCooldown(updatedAt: Date | null | undefined): {
         return { canUpdate: true, nextUpdateAt: null };
     }
     return { canUpdate: false, nextUpdateAt: new Date(next).toISOString() };
-}
-
-const BANK_FIELD_KEYS = [
-    "fullName",
-    "bankAccount",
-    "ifsc",
-    "trc20Address",
-    "bep20Address",
-    "upiId",
-    "bankName",
-] as const;
-
-type BankFieldKey = (typeof BANK_FIELD_KEYS)[number];
-
-function normBankVal(v: unknown): string {
-    if (v == null) return "";
-    return String(v).trim();
-}
-
-/**
- * First-time fill of empty fields is always allowed (bank then USDT, etc.).
- * Cooldown applies only when changing or clearing a value that was already set.
- */
-function classifyBankWrite(
-    existing: Partial<Record<BankFieldKey, string | null | undefined>>,
-    incoming: Partial<Record<BankFieldKey, string | null | undefined>>
-): { hasChange: boolean } {
-    let hasChange = false;
-    for (const key of BANK_FIELD_KEYS) {
-        if (incoming[key] === undefined) continue;
-        const oldV = normBankVal(existing[key]);
-        const newV = normBankVal(incoming[key]);
-        if (oldV === newV) continue;
-        if (oldV !== "") hasChange = true;
-    }
-    return { hasChange };
 }
 
 export const bankRoutes = (app: OpenAPIHono) => {
@@ -657,7 +550,7 @@ export const bankRoutes = (app: OpenAPIHono) => {
                 );
             }
 
-            const { hasChange } = classifyBankWrite(existing, {
+            const { hasChange, invalidLegacyCorrectionOnly } = classifyBankWrite(existing, {
                 fullName,
                 bankAccount,
                 ifsc,
@@ -668,7 +561,12 @@ export const bankRoutes = (app: OpenAPIHono) => {
             });
 
             const cooldown = updateCooldown(existing.updatedAt);
-            if (!user.isDemo && hasChange && !cooldown.canUpdate) {
+            if (
+                !user.isDemo &&
+                hasChange &&
+                !invalidLegacyCorrectionOnly &&
+                !cooldown.canUpdate
+            ) {
                 return apiError(
                     c,
                     `Saved details can only be changed once every 24 hours. You can still add missing bank / UPI / USDT. Try changing after ${cooldown.nextUpdateAt}`,

@@ -22,6 +22,14 @@ import {
     creditRechargeBonus,
 } from "@bcwin/activity-bonus";
 import { createWagerRequirement, getUserWagerStatus } from "@/lib/wagerEngine";
+import {
+    isValidBankAccount,
+    isValidBep20Address,
+    isValidIfsc,
+    isValidRecipientName,
+    isValidTrc20Address,
+    isValidUpiId,
+} from "@/schemas/bankDetails";
 
 const logger = new Logger("payment");
 
@@ -999,6 +1007,20 @@ export const paymentRoutes = (app: OpenAPIHono) => {
                 );
             }
 
+            if (
+                (method === "CXPAY" || method === "XDPAY") &&
+                userBank &&
+                (!isValidBankAccount(userBank.bankAccount) ||
+                    !isValidRecipientName(userBank.fullName) ||
+                    !isValidIfsc(userBank.ifsc))
+            ) {
+                return apiError(
+                    c,
+                    "Saved bank details have an invalid account number, recipient name or IFSC. Please correct them before withdrawing.",
+                    HTTP_STATUS.BAD_REQUEST
+                );
+            }
+
             if (method === "OXAPAY") {
                 if (!cryptoChain || (cryptoChain !== "BEP20" && cryptoChain !== "TRC20")) {
                     return apiError(
@@ -1012,6 +1034,17 @@ export const paymentRoutes = (app: OpenAPIHono) => {
                     return apiError(
                         c,
                         `${cryptoChain} address is required for OXAPAY withdrawal. Please update your bank details`,
+                        HTTP_STATUS.BAD_REQUEST
+                    );
+                }
+                const cryptoAddressValid =
+                    cryptoChain === "BEP20"
+                        ? isValidBep20Address(cryptoAddress)
+                        : isValidTrc20Address(cryptoAddress);
+                if (!cryptoAddressValid) {
+                    return apiError(
+                        c,
+                        `Saved ${cryptoChain} address is invalid. Please correct it before withdrawing.`,
                         HTTP_STATUS.BAD_REQUEST
                     );
                 }
@@ -1038,6 +1071,13 @@ export const paymentRoutes = (app: OpenAPIHono) => {
                 return apiError(
                     c,
                     "UPI ID is required for UPI withdrawal. Please update your bank details",
+                    HTTP_STATUS.BAD_REQUEST
+                );
+            }
+            if (method === "UPI" && !isValidUpiId(userBank?.upiId)) {
+                return apiError(
+                    c,
+                    "Saved UPI ID is invalid. Please correct it before withdrawing.",
                     HTTP_STATUS.BAD_REQUEST
                 );
             }
