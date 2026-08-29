@@ -52,6 +52,10 @@ const WithdrawItemSchema = z.object({
         description: "Withdrawal status",
         example: "GENERATED",
     }),
+    note: z.string().nullable().optional().openapi({
+        description: "Admin rejection remark or withdrawal note",
+        example: "Account holder name does not match",
+    }),
     user: z.object({
         id: z.string().openapi({
             description: "User ID",
@@ -124,7 +128,7 @@ const GetWithdrawalsResponseSchema = z.object({
 });
 
 // Manage withdrawal schema
-const ManageWithdrawalBodySchema = z.object({
+export const ManageWithdrawalBodySchema = z.object({
     action: z.enum(["approve", "reject"]).openapi({
         description: "Action to perform on the withdrawal",
         example: "approve",
@@ -133,6 +137,15 @@ const ManageWithdrawalBodySchema = z.object({
         description: "Order ID of the withdrawal to manage",
         example: "20250112-12345678901234",
     }),
+    remark: z
+        .string()
+        .trim()
+        .max(300, "Rejection remark must be at most 300 characters")
+        .optional()
+        .openapi({
+            description: "Optional user-visible reason when rejecting",
+            example: "Account holder name does not match",
+        }),
 });
 
 const ManageWithdrawalResponseSchema = z.object({
@@ -215,7 +228,7 @@ export const withdrawRoutes = (app: OpenAPIHono) => {
 
             // Check cache using hash-based caching
             const mainCacheKey = CacheKey.adminWithdrawals;
-            const fieldKey = `v3-status:${status || "all"}-userId:${userId || "all"
+            const fieldKey = `v4-status:${status || "all"}-userId:${userId || "all"
                 }-method:${method || "all"}-page:${page}-limit:${limit}`;
 
             const cachedData = await Cache.hget<{
@@ -225,6 +238,7 @@ export const withdrawRoutes = (app: OpenAPIHono) => {
                     amount: number;
                     method: string;
                     status: string;
+                    note?: string | null;
                     user: {
                         id: string;
                         serialNumber: number;
@@ -307,6 +321,7 @@ export const withdrawRoutes = (app: OpenAPIHono) => {
                     amount: withdrawal.amount,
                     method: withdrawal.method,
                     status: withdrawal.status,
+                    note: withdrawal.note,
                     user: {
                         id: withdrawal.user.id,
                         serialNumber: withdrawal.user.serialNumber,
@@ -345,7 +360,7 @@ export const withdrawRoutes = (app: OpenAPIHono) => {
 
     app.openapi(manageWithdrawalRoute, async (c) => {
         try {
-            const { action, orderId } = c.req.valid("json");
+            const { action, orderId, remark } = c.req.valid("json");
 
             // Find the withdrawal with GENERATED status
             const withdraw = await prisma.withdraw.findUnique({
@@ -381,6 +396,7 @@ export const withdrawRoutes = (app: OpenAPIHono) => {
                             },
                             data: {
                                 status: WithdrawOrderStatus.FAILED,
+                                ...(remark ? { note: remark } : {}),
                             },
                         });
 
@@ -412,7 +428,10 @@ export const withdrawRoutes = (app: OpenAPIHono) => {
                 );
 
                 // Invalidate withdrawal cache
-                await Cache.del(CacheKey.adminWithdrawals);
+                await Promise.all([
+                    Cache.del(CacheKey.adminWithdrawals),
+                    Cache.del(CacheKey.userWithdrawals(withdraw.userId)),
+                ]);
 
                 return c.json(
                     {
