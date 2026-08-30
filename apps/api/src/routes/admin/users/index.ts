@@ -9,6 +9,7 @@ import { penaltyRoutes } from "./penalty";
 import { createUserRoutes } from "./create";
 import { inviteTreeRoutes } from "./inviteTree";
 import { yesterdayStatsRoutes } from "./yesterdayStats";
+import { teamDayAnalysisRoutes } from "./teamDayAnalysis";
 
 export const userManagementRoutes = (app: OpenAPIHono) => {
     listRoutes(app);
@@ -16,6 +17,7 @@ export const userManagementRoutes = (app: OpenAPIHono) => {
     inviteTreeRoutes(app);
     statsRoutes(app);
     yesterdayStatsRoutes(app);
+    teamDayAnalysisRoutes(app);
     banRoutes(app);
     unbanRoutes(app);
     balanceRoutes(app);
