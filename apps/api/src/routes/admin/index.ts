@@ -16,6 +16,7 @@ import { profitLossRoutes } from "./profitLoss";
 import { topPerformanceRoutes } from "./topPerformance";
 import { queriesRoutes } from "./queries";
 import { salaryRoutes } from "./salary";
+import { salaryLeadersRoutes } from "./salaryLeaders";
 import { vipRulesRoutes } from "./vipRules";
 import { adminBankRoutes } from "./bank";
 import { activityBonusSettingsRoutes } from "./activityBonusSettings";
@@ -85,6 +86,11 @@ export const adminRoutes = (app: OpenAPIHono) => {
     const salaryApp = new OpenAPIHono({ defaultHook: zodErrorHook });
     salaryRoutes(salaryApp);
     adminApp.route("/salary", salaryApp);
+
+    // Curated Salary Leaders membership list (separate from salary payouts)
+    const salaryLeadersApp = new OpenAPIHono({ defaultHook: zodErrorHook });
+    salaryLeadersRoutes(salaryLeadersApp);
+    adminApp.route("/salary-leaders", salaryLeadersApp);
 
     // Mount VIP rules routes under /admin/vip-rules
     const vipRulesApp = new OpenAPIHono({ defaultHook: zodErrorHook });

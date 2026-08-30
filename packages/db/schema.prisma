@@ -55,6 +55,7 @@ model User {
     userQueries       UserQuery[]
     salaryRules       SalaryRule[]
     salaryPayments    SalaryPayment[]
+    salaryLeader      SalaryLeader?
     autoSalaryClaims  AutoSalaryClaim[]        @relation("AutoSalaryClaimUser")
     autoSalaryReviews AutoSalaryClaim[]        @relation("AutoSalaryClaimReviewer")
     winStreak         UserWinStreak?
@@ -434,6 +435,17 @@ model SalaryPayment {
 
     @@index([userId])
     @@index([salaryRuleId])
+    @@index([createdAt])
+}
+
+/// Admin-curated list of users shown in Salary Leaders.
+model SalaryLeader {
+    id     String @id @default(uuid())
+    userId String @unique
+    user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+    createdAt DateTime @default(now())
+
     @@index([createdAt])
 }
 
