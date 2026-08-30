@@ -7,6 +7,11 @@ import { apiError, CommonResponses } from "@/lib/utils";
 import { authCookie } from "@/schemas";
 import { prisma } from "@bcwin/db";
 import { getTeamMembers } from "./helpers";
+import {
+    adminMobileSearchValues,
+    adminUserSearchOr,
+    normalizeAdminUserSearch,
+} from "@/lib/adminUserSearch";
 
 const logger = new Logger("admin-invite-tree");
 
@@ -153,12 +158,18 @@ export const inviteTreeRoutes = (app: OpenAPIHono) => {
                     });
                 }
 
-                // 10-digit mobile
-                if (/^\d{10}$/.test(q)) {
-                    return prisma.user.findFirst({
-                        where: { mobileNumber: q },
+                // Mobile input may be local 10 digits, country-prefixed, or spaced.
+                const mobileCandidates = adminMobileSearchValues(q);
+                if (mobileCandidates.some((mobile) => mobile.length >= 10)) {
+                    const byMobile = await prisma.user.findFirst({
+                        where: {
+                            OR: mobileCandidates.map((mobile) => ({
+                                mobileNumber: { contains: mobile },
+                            })),
+                        },
                         select: rootUserSelect,
                     });
+                    if (byMobile) return byMobile;
                 }
 
                 // Serial number (must fit PostgreSQL Int: -2,147,483,648 … 2,147,483,647)
@@ -190,7 +201,10 @@ export const inviteTreeRoutes = (app: OpenAPIHono) => {
                 });
                 if (byCode) return byCode;
 
-                return null;
+                return prisma.user.findFirst({
+                    where: { OR: adminUserSearchOr(normalizeAdminUserSearch(q)) },
+                    select: rootUserSelect,
+                });
             };
 
             if (userId) {
@@ -212,8 +226,15 @@ export const inviteTreeRoutes = (app: OpenAPIHono) => {
                     select: rootUserSelect,
                 });
             } else if (mobile) {
+                const mobileCandidates = adminMobileSearchValues(mobile);
                 rootUser = await prisma.user.findFirst({
-                    where: { mobileNumber: mobile },
+                    where: {
+                        OR: (mobileCandidates.length ? mobileCandidates : [mobile]).map(
+                            (candidate) => ({
+                                mobileNumber: { contains: candidate },
+                            })
+                        ),
+                    },
                     select: rootUserSelect,
                 });
             } else if (username) {

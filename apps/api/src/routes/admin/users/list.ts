@@ -11,6 +11,7 @@ import {
 } from "@/schemas";
 import { prisma } from "@bcwin/db";
 import { Cache, CacheKey } from "@bcwin/cache";
+import { adminUserSearchOr, normalizeAdminUserSearch } from "@/lib/adminUserSearch";
 
 const logger = new Logger("admin-users-list");
 
@@ -51,11 +52,12 @@ export const listRoutes = (app: OpenAPIHono) => {
                 role,
                 isDemo,
             } = c.req.valid("query");
+            const normalizedSearch = normalizeAdminUserSearch(search);
             const skip = (page - 1) * limit;
 
             // Check cache using hash-based caching
             const mainCacheKey = CacheKey.adminUsers;
-            const fieldKey = `search:${search || "none"}-banned:${
+            const fieldKey = `v2-search:${normalizedSearch || "none"}-banned:${
                 isBanned || "all"
             }-penalty:${hasIllegalBetPenalty || "all"}-role:${
                 role || "all"
@@ -94,14 +96,8 @@ export const listRoutes = (app: OpenAPIHono) => {
 
             const where: any = {};
 
-            if (search) {
-                const serialNumber = parseInt(search, 10);
-                where.OR = [
-                    { id: { contains: search, mode: "insensitive" } },
-                    { username: { contains: search, mode: "insensitive" } },
-                    { mobileNumber: { contains: search, mode: "insensitive" } },
-                    ...(!isNaN(serialNumber) ? [{ serialNumber }] : []),
-                ];
+            if (normalizedSearch) {
+                where.OR = adminUserSearchOr(normalizedSearch);
             }
 
             if (isBanned !== undefined) {

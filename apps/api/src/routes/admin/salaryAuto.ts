@@ -14,6 +14,7 @@ import {
     rejectAutoSalaryClaim,
 } from "@/lib/autoSalaryService";
 import { rejectIfAutoSalaryPaused } from "@/lib/autoSalaryGate";
+import { adminUserSearchOr, normalizeAdminUserSearch } from "@/lib/adminUserSearch";
 
 const logger = new Logger("admin-auto-salary");
 
@@ -371,22 +372,10 @@ export const autoSalaryRoutes = (app: OpenAPIHono) => {
                 where.periodDate = pd;
             }
 
-            if (search) {
-                const serialNum = parseInt(search, 10);
+            const normalizedSearch = normalizeAdminUserSearch(search);
+            if (normalizedSearch) {
                 where.user = {
-                    OR: [
-                        ...(isNaN(serialNum)
-                            ? []
-                            : [{ serialNumber: serialNum }]),
-                        {
-                            username: {
-                                contains: search,
-                                mode: "insensitive" as const,
-                            },
-                        },
-                        { mobileNumber: { contains: search } },
-                        { id: search },
-                    ],
+                    OR: adminUserSearchOr(normalizedSearch),
                 };
             }
 

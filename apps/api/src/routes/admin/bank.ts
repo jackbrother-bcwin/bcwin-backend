@@ -8,6 +8,7 @@ import { authCookie } from "@/schemas";
 import { prisma } from "@bcwin/db";
 import { Cache, CacheKey } from "@bcwin/cache";
 import { searchUserBankQuerySchema, updateBankDetailsSchema } from "../../schemas/admin/bank";
+import { adminUserSearchOr, normalizeAdminUserSearch } from "@/lib/adminUserSearch";
 
 const logger = new Logger("admin-bank-details");
 
@@ -104,15 +105,9 @@ export const adminBankRoutes = (app: OpenAPIHono) => {
         try {
             const { search } = c.req.valid("query");
 
-            // Build search filter: serialNumber, username, or mobileNumber
-            const serialNum = parseInt(search);
+            const normalizedSearch = normalizeAdminUserSearch(search);
             const userFilter = {
-                OR: [
-                    ...(isNaN(serialNum) ? [] : [{ serialNumber: serialNum }]),
-                    { username: { contains: search, mode: "insensitive" as const } },
-                    { mobileNumber: { contains: search } },
-                    { id: search } // Try exact matching UUID as fallback
-                ],
+                OR: adminUserSearchOr(normalizedSearch),
             };
 
             const user = await prisma.user.findFirst({

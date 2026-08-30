@@ -7,6 +7,7 @@ import { apiError, CommonResponses } from "@/lib/utils";
 import { authCookie, limit, page } from "@/schemas";
 import { prisma } from "@bcwin/db";
 import { Cache, CacheKey } from "@bcwin/cache";
+import { adminUserSearchOr, normalizeAdminUserSearch } from "@/lib/adminUserSearch";
 import {
     ADMIN_USER_IDENTITY_SELECT,
     mapAdminUserIdentity,
@@ -134,13 +135,14 @@ export const balanceTransactionRoutes = (app: OpenAPIHono) => {
     app.openapi(getBalanceTransactionsRoute, async (c) => {
         try {
             const { page, limit, search } = c.req.valid("query");
+            const normalizedSearch = normalizeAdminUserSearch(search);
 
             const skip = (page - 1) * limit;
 
             // Check cache using hash-based caching
             const mainCacheKey = CacheKey.adminBalanceTransactions;
-            const fieldKey = `v3-search:${
-                search || "all"
+            const fieldKey = `v4-search:${
+                normalizedSearch || "all"
             }-page:${page}-limit:${limit}`;
 
             const cachedData = await Cache.hget<{
@@ -179,15 +181,9 @@ export const balanceTransactionRoutes = (app: OpenAPIHono) => {
 
             // Build a flexible user filter from the search term
             const where: any = {};
-            if (search) {
-                const serialNum = parseInt(search);
+            if (normalizedSearch) {
                 where.user = {
-                    OR: [
-                        { id: search },
-                        ...(isNaN(serialNum) ? [] : [{ serialNumber: serialNum }]),
-                        { username: { contains: search, mode: "insensitive" as const } },
-                        { mobileNumber: { contains: search } },
-                    ],
+                    OR: adminUserSearchOr(normalizedSearch),
                 };
             }
 

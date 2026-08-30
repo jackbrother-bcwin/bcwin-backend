@@ -6,7 +6,7 @@ export const GetUsersQuerySchema = z.object({
     page,
     limit,
     search: z.string().optional().openapi({
-        description: "Search by user ID, username, or mobile number",
+        description: "Search by serial, user ID, username, mobile number, email, or referral code",
         example: "user123",
     }),
     isBanned: z.enum(["true", "false"]).optional().openapi({

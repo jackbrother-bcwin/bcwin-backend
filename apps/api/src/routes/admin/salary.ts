@@ -10,6 +10,7 @@ import { Cache, CacheKey } from "@bcwin/cache";
 import { WebSocketManager } from "@bcwin/websocket";
 import { generateOrderId } from "@/lib/payment";
 import { autoSalaryRoutes } from "./salaryAuto";
+import { adminUserSearchOr, normalizeAdminUserSearch } from "@/lib/adminUserSearch";
 
 const logger = new Logger("admin-salary");
 
@@ -467,17 +468,10 @@ export const salaryRoutes = (app: OpenAPIHono) => {
             }
 
             // Build user search filter
-            if (search) {
-                const serialNum = parseInt(search);
+            const normalizedSearch = normalizeAdminUserSearch(search);
+            if (normalizedSearch) {
                 where.user = {
-                    OR: [
-                        ...(isNaN(serialNum)
-                            ? []
-                            : [{ serialNumber: serialNum }]),
-                        { username: { contains: search, mode: "insensitive" as const } },
-                        { mobileNumber: { contains: search } },
-                        { id: search },
-                    ],
+                    OR: adminUserSearchOr(normalizedSearch),
                 };
             }
 

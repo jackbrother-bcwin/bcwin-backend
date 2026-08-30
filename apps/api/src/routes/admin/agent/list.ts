@@ -5,8 +5,9 @@ import Logger from "@bcwin/logger";
 import { HTTP_STATUS } from "@/lib/http";
 import { apiError, CommonResponses } from "@/lib/utils";
 import { authCookie, limit, page, AgentItemSchema } from "@/schemas";
-import { prisma } from "@bcwin/db";
+import { prisma, type Prisma } from "@bcwin/db";
 import { Cache, CacheKey } from "@bcwin/cache";
+import { adminUserSearchOr, normalizeAdminUserSearch } from "@/lib/adminUserSearch";
 
 const logger = new Logger("admin-agent-list");
 
@@ -14,6 +15,10 @@ const logger = new Logger("admin-agent-list");
 const GetAgentsQuerySchema = z.object({
     page,
     limit,
+    search: z.string().optional().openapi({
+        description: "Search by serial, username, mobile, email, or referral code",
+        example: "9876543210",
+    }),
 });
 
 const GetAgentsResponseSchema = z.object({
@@ -63,13 +68,14 @@ const getAgentsRoute = createRoute({
 export const listRoutes = (app: OpenAPIHono) => {
     app.openapi(getAgentsRoute, async (c) => {
         try {
-            const { page, limit } = c.req.valid("query");
+            const { page, limit, search } = c.req.valid("query");
+            const normalizedSearch = normalizeAdminUserSearch(search);
 
             const skip = (page - 1) * limit;
 
             // Check cache using hash-based caching
             const mainCacheKey = CacheKey.adminAgents;
-            const fieldKey = `page:${page}-limit:${limit}`;
+            const fieldKey = `v2-search:${normalizedSearch || "none"}-page:${page}-limit:${limit}`;
 
             const cachedData = await Cache.hget<{
                 agents: Array<{
@@ -80,6 +86,8 @@ export const listRoutes = (app: OpenAPIHono) => {
                     role: string;
                     balance: number;
                     isBanned: boolean;
+                    hasIllegalBetPenalty: boolean;
+                    illegalBetPenaltyFactor: number | null;
                     createdAt: string;
                 }>;
                 total: number;
@@ -97,9 +105,12 @@ export const listRoutes = (app: OpenAPIHono) => {
                 );
             }
 
-            const where = {
+            const where: Prisma.UserWhereInput = {
                 role: "AGENT" as const,
             };
+            if (normalizedSearch) {
+                where.OR = adminUserSearchOr(normalizedSearch);
+            }
 
             const [agents, total] = await Promise.all([
                 prisma.user.findMany({
@@ -117,6 +128,8 @@ export const listRoutes = (app: OpenAPIHono) => {
                         balance: true,
                         role: true,
                         isBanned: true,
+                        hasIllegalBetPenalty: true,
+                        illegalBetPenaltyFactor: true,
                         createdAt: true,
                     },
                 }),
@@ -134,6 +147,8 @@ export const listRoutes = (app: OpenAPIHono) => {
                     balance: agent.balance,
                     role: agent.role,
                     isBanned: agent.isBanned,
+                    hasIllegalBetPenalty: agent.hasIllegalBetPenalty,
+                    illegalBetPenaltyFactor: agent.illegalBetPenaltyFactor,
                     createdAt: agent.createdAt.toISOString(),
                 })),
                 total,
