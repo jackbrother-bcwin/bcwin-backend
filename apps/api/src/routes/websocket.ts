@@ -28,6 +28,7 @@ export const websocketRoutes = (app: OpenAPIHono) => {
                 onMessage(event, ws) {
                     if (event.data.toString() === "ping") {
                         ws.send("pong");
+                        void WebSocketManager.touchClient(id);
                         return;
                     }
 
@@ -36,15 +37,15 @@ export const websocketRoutes = (app: OpenAPIHono) => {
                         event.data.toString()
                     );
                 },
-                onClose: () => {
+                onClose: (_event, ws) => {
                     if (!WebSocketManager.isShuttingDown()) {
-                        WebSocketManager.removeClient(id);
+                        WebSocketManager.removeClient(id, ws);
                     }
                 },
-                onError: (err) => {
+                onError: (err, ws) => {
                     logger.warn(`WebSocket error for id ${id}:`, err);
                     if (!WebSocketManager.isShuttingDown()) {
-                        WebSocketManager.removeClient(id);
+                        WebSocketManager.removeClient(id, ws);
                     }
                 },
             };

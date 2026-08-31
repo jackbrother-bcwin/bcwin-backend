@@ -486,15 +486,15 @@ export class WebSocketManager {
 
             switch (action) {
                 case "subscribe":
-                    this.subscribe(clientId, finalTopic);
-                    this.sendSuccessToClient(clientId, {
+                    await this.subscribe(clientId, finalTopic);
+                    await this.sendSuccessToClient(clientId, {
                         message: "Subscribed to topic",
                         topic: finalTopic,
                     });
                     break;
                 case "unsubscribe":
-                    this.unsubscribe(clientId, finalTopic);
-                    this.sendSuccessToClient(clientId, {
+                    await this.unsubscribe(clientId, finalTopic);
+                    await this.sendSuccessToClient(clientId, {
                         message: "Unsubscribed from topic",
                         topic: finalTopic,
                     });
@@ -528,10 +528,30 @@ export class WebSocketManager {
             `Publishing to topic '${topic}' for ${subscribers.length} subscribers found in Redis`
         );
 
-        // Your `sendToClient` logic is already replica-safe, so this works perfectly.
-        // It will correctly route the message to the right replica via Redis Pub/Sub.
-        for (const clientId of subscribers) {
-            await this.sendToClient(clientId, message);
+        // Route in bounded parallel batches. Dead clients can otherwise make a
+        // period broadcast wait on hundreds of sequential Redis lookups.
+        const staleClientIds: string[] = [];
+        const batchSize = 100;
+        for (let offset = 0; offset < subscribers.length; offset += batchSize) {
+            const batch = subscribers.slice(offset, offset + batchSize);
+            const delivered = await Promise.all(
+                batch.map((clientId) => this.sendToClient(clientId, message))
+            );
+            delivered.forEach((ok, index) => {
+                if (!ok) staleClientIds.push(batch[index]);
+            });
+        }
+
+        // Crash/disconnect leftovers have no metadata TTL but can remain in a
+        // topic set forever. Prune them as broadcasts discover them.
+        if (staleClientIds.length > 0) {
+            const pipeline = Cache.client.pipeline();
+            pipeline.srem(
+                CacheKey.websocketTopic(topic),
+                ...staleClientIds
+            );
+            pipeline.srem(CacheKey.websocketGlobalClients, ...staleClientIds);
+            await pipeline.exec();
         }
     }
 
@@ -593,15 +613,55 @@ export class WebSocketManager {
         logger.debug("Client connected", { id, instanceId: this.INSTANCE_ID });
     }
 
+    /** Keep cross-replica routing alive for long-running browser sessions. */
+    public static async touchClient(id: string): Promise<void> {
+        if (!this.clients.has(id)) return;
+        try {
+            const metadataKey = CacheKey.websocketClientMetadata(id);
+            const refreshed = await Cache.client.expire(
+                metadataKey,
+                this.CLIENT_TTL_SECONDS
+            );
+            if (!refreshed) {
+                if (!this.clients.has(id)) return;
+                const metadata: ClientMetadata = {
+                    id,
+                    instanceId: this.INSTANCE_ID,
+                    connectedAt: new Date().toISOString(),
+                };
+                await Cache.client.set(
+                    metadataKey,
+                    JSON.stringify(metadata),
+                    "EX",
+                    this.CLIENT_TTL_SECONDS
+                );
+                await Cache.client.sadd(CacheKey.websocketGlobalClients, id);
+            }
+        } catch (error) {
+            logger.warn("Failed to refresh WebSocket client metadata", {
+                id,
+                error,
+            });
+        }
+    }
+
     /**
      * Removes a client connection from the manager.
      * @param id - The unique identifier for the client.
      */
-    public static async removeClient(id: string) {
+    public static async removeClient(id: string, expectedClient?: WSContext) {
+        // A reconnect reuses the browser's client id. A delayed close callback
+        // from the old socket must not remove the replacement connection.
+        if (expectedClient && this.clients.get(id) !== expectedClient) return;
+
         // 1. Get all topics this client was subscribed to from Redis.
         const topics = await Cache.client.smembers(
             CacheKey.websocketClientTopics(id)
         );
+
+        // The replacement may have connected while the Redis read above was
+        // in flight. Re-check before touching either local or shared state.
+        if (expectedClient && this.clients.get(id) !== expectedClient) return;
 
         // 2. Start a pipeline for a single, atomic transaction.
         const pipeline = Cache.client.pipeline();

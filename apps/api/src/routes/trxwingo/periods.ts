@@ -66,6 +66,7 @@ export const periodRoutes = (app: OpenAPIHono) => {
             const skip = (page - 1) * limit;
 
             const whereClause = duration ? { durationSeconds: duration } : {};
+            const now = new Date();
 
             const [periods, total, currentPeriod] = await Promise.all([
                 prisma.trxWingoPeriod.findMany({
@@ -93,6 +94,8 @@ export const periodRoutes = (app: OpenAPIHono) => {
                     where: {
                         ...whereClause,
                         status: "ACTIVE",
+                        startTime: { lte: now },
+                        endTime: { gt: now },
                     },
                     orderBy: { startTime: "desc" },
                     select: {

@@ -22,7 +22,9 @@ export class TrxWingoScheduler {
     private resultGenerator: ResultGenerator;
     private betSettlement: BetSettlement;
     private timer: ReturnType<typeof setInterval> | null = null;
-    private isTaskRunning = false;
+    private lifecycleRunning = false;
+    private drawRunning = false;
+    private settleRunning = false;
 
     constructor() {
         this.periodManager = new PeriodManager();
@@ -61,56 +63,71 @@ export class TrxWingoScheduler {
     }
 
     private async safeCycle(): Promise<void> {
-        if (this.isTaskRunning) {
-            // Do not skip silently forever — warn so ops can see pile-ups
+        if (this.lifecycleRunning) {
             logger.warn(
-                "Previous scheduler cycle still running — skipping tick."
+                "Previous TRX period handoff still running — skipping tick."
             );
             return;
         }
-        this.isTaskRunning = true;
+        this.lifecycleRunning = true;
         try {
-            await this.runCycle();
+            // Keep the clock lifecycle independent from chain/provider latency.
+            await this.periodManager.endActivePeriods();
+            await this.periodManager.createPeriodsForAllDurations();
         } catch (error) {
-            logger.error("Scheduler cycle error:", error);
+            logger.error("TRX period handoff error:", error);
         } finally {
-            this.isTaskRunning = false;
+            this.lifecycleRunning = false;
+        }
+
+        void this.drawDuePeriods();
+        void this.settleEndedPeriods();
+    }
+
+    private async drawDuePeriods(): Promise<void> {
+        if (this.drawRunning) return;
+        this.drawRunning = true;
+        try {
+            await this.resultGenerator.processAllDrawDuePeriods();
+        } catch (error) {
+            logger.error("TRX draw cycle error:", error);
+        } finally {
+            this.drawRunning = false;
         }
     }
 
-    /**
-     * 1) Sleep-to-deadline draw at endTime−offset (or late catch-up)
-     * 2) End ACTIVE periods past endTime
-     * 3) Create next periods
-     * 4) Settle ENDED periods that already have results
-     */
-    private async runCycle(): Promise<void> {
-        // Draw first so we capture tip at exact drawAt when possible
-        await this.resultGenerator.processAllDrawDuePeriods();
-
-        await this.periodManager.endActivePeriods();
-
-        await this.periodManager.createPeriodsForAllDurations();
-
-        await this.betSettlement.settleAllEndedPeriodsWithResults();
+    private async settleEndedPeriods(): Promise<void> {
+        if (this.settleRunning) return;
+        this.settleRunning = true;
+        try {
+            await this.betSettlement.settleAllEndedPeriodsWithResults();
+        } catch (error) {
+            logger.error("TRX settlement cycle error:", error);
+        } finally {
+            this.settleRunning = false;
+        }
     }
 
     async runManualCycle(): Promise<void> {
-        if (this.isTaskRunning) {
+        if (this.lifecycleRunning || this.drawRunning) {
             logger.warn(
                 "Cannot run manual cycle: a task is already in progress."
             );
             return;
         }
-        this.isTaskRunning = true;
+        this.lifecycleRunning = true;
         try {
             logger.info("Running manual scheduler cycle…");
-            await this.runCycle();
+            await this.periodManager.endActivePeriods();
+            await this.periodManager.createPeriodsForAllDurations();
+            this.lifecycleRunning = false;
+            await this.drawDuePeriods();
+            await this.settleEndedPeriods();
             logger.info("Manual scheduler cycle completed.");
         } catch (error) {
             logger.error("Error in manual scheduler cycle:", error);
         } finally {
-            this.isTaskRunning = false;
+            this.lifecycleRunning = false;
         }
     }
 }

@@ -110,10 +110,13 @@ export class PeriodManager {
     async getCurrentPeriod(
         durationSeconds: number
     ): Promise<TrxWingoPeriod | null> {
+        const now = new Date();
         return await prisma.trxWingoPeriod.findFirst({
             where: {
                 durationSeconds,
                 status: "ACTIVE",
+                startTime: { lte: now },
+                endTime: { gt: now },
             },
             orderBy: { startTime: "desc" },
         });
