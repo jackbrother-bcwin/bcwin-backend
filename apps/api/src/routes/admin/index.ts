@@ -23,11 +23,13 @@ import { activityBonusSettingsRoutes } from "./activityBonusSettings";
 import { luckySpinAdminRoutes } from "./luckySpin";
 import { winStreakRulesRoutes } from "./winStreakRules";
 import { turnoverRoutes } from "./turnover";
+import { dashboardInsightsRoutes } from "./dashboardInsights";
 
 export const adminRoutes = (app: OpenAPIHono) => {
     const adminApp = new OpenAPIHono({ defaultHook: zodErrorHook });
 
     overviewRoutes(adminApp);
+    dashboardInsightsRoutes(adminApp);
     setResultsRoutes(adminApp);
 
     // Mount profit and loss routes under /admin/profit-loss
