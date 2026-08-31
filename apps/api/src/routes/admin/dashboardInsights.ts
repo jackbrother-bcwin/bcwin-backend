@@ -142,6 +142,107 @@ const getTopUsersRoute = createRoute({
     },
 });
 
+const liveGameSchema = z.enum(["wingo", "trxwingo", "k3", "5d", "moto"]);
+
+const getGameLiveBetsRoute = createRoute({
+    method: "get",
+    path: "/dashboard/game-live-bets",
+    tags: ["admin"],
+    summary: "Current-period live bet book for an admin game manager",
+    request: {
+        cookies: authCookie,
+        query: z.object({
+            game: liveGameSchema,
+            periodId: z.string().uuid(),
+        }),
+    },
+    responses: {
+        200: {
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        success: z.boolean(),
+                        game: liveGameSchema,
+                        periodId: z.string(),
+                        total: z.number(),
+                        totalBetAmount: z.number(),
+                        distribution: z.array(
+                            z.object({
+                                betType: z.string(),
+                                betChoice: z.string(),
+                                betCount: z.number(),
+                                amount: z.number(),
+                            })
+                        ),
+                        bets: z.array(
+                            z.object({
+                                id: z.string(),
+                                user: userIdentitySchema,
+                                betType: z.string(),
+                                betChoice: z.string(),
+                                betAmount: z.number(),
+                                status: z.literal("PENDING"),
+                                createdAt: z.string(),
+                            })
+                        ),
+                    }),
+                },
+            },
+            description:
+                "Uncached current-period totals, distribution, and newest 100 bets",
+        },
+        ...CommonResponses.badRequest(),
+        ...CommonResponses.unauthorized(),
+        ...CommonResponses.internalServerError(),
+    },
+});
+
+type LiveBookDistribution = {
+    betType: string;
+    betChoice: string;
+    betCount: number;
+    amount: number;
+};
+
+type LiveBookBet = {
+    id: string;
+    user: ReturnType<typeof mapAdminUserIdentity>;
+    betType: string;
+    betChoice: string;
+    betAmount: number;
+    status: "PENDING";
+    createdAt: string;
+};
+
+function liveBookPayload(
+    game: "wingo" | "trxwingo" | "k3" | "5d" | "moto",
+    periodId: string,
+    distribution: LiveBookDistribution[],
+    bets: LiveBookBet[]
+) {
+    const sortedDistribution = distribution.sort(
+        (a, b) =>
+            b.amount - a.amount ||
+            a.betType.localeCompare(b.betType) ||
+            a.betChoice.localeCompare(b.betChoice)
+    );
+    return {
+        success: true as const,
+        game,
+        periodId,
+        total: sortedDistribution.reduce(
+            (sum, item) => sum + item.betCount,
+            0
+        ),
+        totalBetAmount: sortedDistribution.reduce(
+            (sum, item) => sum + item.amount,
+            0
+        ),
+        distribution: sortedDistribution,
+        bets,
+    };
+}
+
 export const dashboardInsightsRoutes = (app: OpenAPIHono) => {
     app.openapi(getLiveWingoRoute, async (c) => {
         try {
@@ -387,6 +488,264 @@ export const dashboardInsightsRoutes = (app: OpenAPIHono) => {
             return apiError(
                 c,
                 "Failed to load top users",
+                HTTP_STATUS.INTERNAL_SERVER_ERROR
+            );
+        }
+    });
+
+    app.openapi(getGameLiveBetsRoute, async (c) => {
+        try {
+            c.header("Cache-Control", "private, no-store");
+            const { game, periodId } = c.req.valid("query");
+            const where = {
+                periodId,
+                status: "PENDING" as const,
+                user: REAL_USER_WHERE,
+            };
+
+            if (game === "wingo") {
+                const [groups, rows] = await Promise.all([
+                    prisma.wingoBet.groupBy({
+                        by: ["betType", "betChoice"],
+                        where,
+                        _count: { _all: true },
+                        _sum: { betAmount: true },
+                    }),
+                    prisma.wingoBet.findMany({
+                        where,
+                        take: 100,
+                        orderBy: { createdAt: "desc" },
+                        select: {
+                            id: true,
+                            betType: true,
+                            betChoice: true,
+                            betAmount: true,
+                            status: true,
+                            createdAt: true,
+                            user: { select: ADMIN_USER_IDENTITY_SELECT },
+                        },
+                    }),
+                ]);
+                return c.json(
+                    liveBookPayload(
+                        game,
+                        periodId,
+                        groups.map((row) => ({
+                            betType: row.betType,
+                            betChoice: row.betChoice,
+                            betCount: row._count._all,
+                            amount: row._sum.betAmount ?? 0,
+                        })),
+                        rows.map((row) => ({
+                            ...row,
+                            user: mapAdminUserIdentity(row.user),
+                            status: "PENDING" as const,
+                            createdAt: row.createdAt.toISOString(),
+                        }))
+                    ),
+                    HTTP_STATUS.OK
+                );
+            }
+
+            if (game === "trxwingo") {
+                const [groups, rows] = await Promise.all([
+                    prisma.trxWingoBet.groupBy({
+                        by: ["betType", "betChoice"],
+                        where,
+                        _count: { _all: true },
+                        _sum: { betAmount: true },
+                    }),
+                    prisma.trxWingoBet.findMany({
+                        where,
+                        take: 100,
+                        orderBy: { createdAt: "desc" },
+                        select: {
+                            id: true,
+                            betType: true,
+                            betChoice: true,
+                            betAmount: true,
+                            status: true,
+                            createdAt: true,
+                            user: { select: ADMIN_USER_IDENTITY_SELECT },
+                        },
+                    }),
+                ]);
+                return c.json(
+                    liveBookPayload(
+                        game,
+                        periodId,
+                        groups.map((row) => ({
+                            betType: row.betType,
+                            betChoice: row.betChoice,
+                            betCount: row._count._all,
+                            amount: row._sum.betAmount ?? 0,
+                        })),
+                        rows.map((row) => ({
+                            ...row,
+                            user: mapAdminUserIdentity(row.user),
+                            status: "PENDING" as const,
+                            createdAt: row.createdAt.toISOString(),
+                        }))
+                    ),
+                    HTTP_STATUS.OK
+                );
+            }
+
+            if (game === "k3") {
+                const [groups, rows] = await Promise.all([
+                    prisma.k3Bet.groupBy({
+                        by: ["betType", "betChoice"],
+                        where,
+                        _count: { _all: true },
+                        _sum: { betAmount: true },
+                    }),
+                    prisma.k3Bet.findMany({
+                        where,
+                        take: 100,
+                        orderBy: { createdAt: "desc" },
+                        select: {
+                            id: true,
+                            betType: true,
+                            betChoice: true,
+                            betAmount: true,
+                            status: true,
+                            createdAt: true,
+                            user: { select: ADMIN_USER_IDENTITY_SELECT },
+                        },
+                    }),
+                ]);
+                return c.json(
+                    liveBookPayload(
+                        game,
+                        periodId,
+                        groups.map((row) => ({
+                            betType: row.betType,
+                            betChoice: row.betChoice,
+                            betCount: row._count._all,
+                            amount: row._sum.betAmount ?? 0,
+                        })),
+                        rows.map((row) => ({
+                            ...row,
+                            user: mapAdminUserIdentity(row.user),
+                            status: "PENDING" as const,
+                            createdAt: row.createdAt.toISOString(),
+                        }))
+                    ),
+                    HTTP_STATUS.OK
+                );
+            }
+
+            if (game === "5d") {
+                const [groups, rows] = await Promise.all([
+                    prisma.fiveDBet.groupBy({
+                        by: ["betCategory", "position", "betType", "betChoice"],
+                        where,
+                        _count: { _all: true },
+                        _sum: { betAmount: true },
+                    }),
+                    prisma.fiveDBet.findMany({
+                        where,
+                        take: 100,
+                        orderBy: { createdAt: "desc" },
+                        select: {
+                            id: true,
+                            betCategory: true,
+                            position: true,
+                            betType: true,
+                            betChoice: true,
+                            betAmount: true,
+                            status: true,
+                            createdAt: true,
+                            user: { select: ADMIN_USER_IDENTITY_SELECT },
+                        },
+                    }),
+                ]);
+                const typeLabel = (row: {
+                    betCategory: string;
+                    position: string | null;
+                    betType: string;
+                }) =>
+                    [row.betCategory, row.position, row.betType]
+                        .filter(Boolean)
+                        .join(" / ");
+                return c.json(
+                    liveBookPayload(
+                        game,
+                        periodId,
+                        groups.map((row) => ({
+                            betType: typeLabel(row),
+                            betChoice: row.betChoice,
+                            betCount: row._count._all,
+                            amount: row._sum.betAmount ?? 0,
+                        })),
+                        rows.map((row) => ({
+                            id: row.id,
+                            user: mapAdminUserIdentity(row.user),
+                            betType: typeLabel(row),
+                            betChoice: row.betChoice,
+                            betAmount: row.betAmount,
+                            status: "PENDING" as const,
+                            createdAt: row.createdAt.toISOString(),
+                        }))
+                    ),
+                    HTTP_STATUS.OK
+                );
+            }
+
+            const [groups, rows] = await Promise.all([
+                prisma.motoBet.groupBy({
+                    by: ["targetPosition", "betType", "betChoice"],
+                    where,
+                    _count: { _all: true },
+                    _sum: { betAmount: true },
+                }),
+                prisma.motoBet.findMany({
+                    where,
+                    take: 100,
+                    orderBy: { createdAt: "desc" },
+                    select: {
+                        id: true,
+                        targetPosition: true,
+                        betType: true,
+                        betChoice: true,
+                        betAmount: true,
+                        status: true,
+                        createdAt: true,
+                        user: { select: ADMIN_USER_IDENTITY_SELECT },
+                    },
+                }),
+            ]);
+            const typeLabel = (row: {
+                targetPosition: string;
+                betType: string;
+            }) => `${row.targetPosition} / ${row.betType}`;
+            return c.json(
+                liveBookPayload(
+                    game,
+                    periodId,
+                    groups.map((row) => ({
+                        betType: typeLabel(row),
+                        betChoice: row.betChoice,
+                        betCount: row._count._all,
+                        amount: row._sum.betAmount ?? 0,
+                    })),
+                    rows.map((row) => ({
+                        id: row.id,
+                        user: mapAdminUserIdentity(row.user),
+                        betType: typeLabel(row),
+                        betChoice: row.betChoice,
+                        betAmount: row.betAmount,
+                        status: "PENDING" as const,
+                        createdAt: row.createdAt.toISOString(),
+                    }))
+                ),
+                HTTP_STATUS.OK
+            );
+        } catch (error) {
+            logger.error("Failed to load admin game live bets", error);
+            return apiError(
+                c,
+                "Failed to load live bets",
                 HTTP_STATUS.INTERNAL_SERVER_ERROR
             );
         }

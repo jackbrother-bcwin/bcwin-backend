@@ -5,6 +5,10 @@ import {
     FixtureTracker,
     authCookieFor,
     cleanupByUserIds,
+    createActiveFiveDPeriod,
+    createActiveK3Period,
+    createActiveMotoPeriod,
+    createActiveTrxWingoPeriod,
     createTestUser,
     createWingoPeriod,
     ensureSystemConfig,
@@ -18,6 +22,7 @@ describe("Admin dashboard insights", () => {
     let live30: Awaited<ReturnType<typeof createWingoPeriod>>;
     let live60: Awaited<ReturnType<typeof createWingoPeriod>>;
     let settledBetId: string;
+    const managerPeriods: Record<string, string> = {};
 
     beforeAll(async () => {
         await ensureSystemConfig();
@@ -65,8 +70,75 @@ describe("Admin dashboard insights", () => {
                     betType: "COLOR",
                     betChoice: "GREEN",
                 },
+                {
+                    userId: admin.id,
+                    periodId: live30.id,
+                    betAmount: 999,
+                    contractAmount: 979.02,
+                    betType: "NUMBER",
+                    betChoice: "1",
+                },
             ],
         });
+
+        const [trxPeriod, k3Period, fiveDPeriod, motoPeriod] =
+            await Promise.all([
+                createActiveTrxWingoPeriod(tracker, 300),
+                createActiveK3Period(tracker, 300),
+                createActiveFiveDPeriod(tracker, 300),
+                createActiveMotoPeriod(tracker, 300),
+            ]);
+        managerPeriods.wingo = live30.id;
+        managerPeriods.trxwingo = trxPeriod.id;
+        managerPeriods.k3 = k3Period.id;
+        managerPeriods["5d"] = fiveDPeriod.id;
+        managerPeriods.moto = motoPeriod.id;
+
+        await Promise.all([
+            prisma.trxWingoBet.create({
+                data: {
+                    userId: player.id,
+                    periodId: trxPeriod.id,
+                    betAmount: 110,
+                    contractAmount: 107.8,
+                    betType: "NUMBER",
+                    betChoice: "4",
+                },
+            }),
+            prisma.k3Bet.create({
+                data: {
+                    userId: player.id,
+                    periodId: k3Period.id,
+                    betAmount: 120,
+                    contractAmount: 117.6,
+                    betType: "SUM",
+                    betChoice: "9",
+                },
+            }),
+            prisma.fiveDBet.create({
+                data: {
+                    userId: player.id,
+                    periodId: fiveDPeriod.id,
+                    betAmount: 130,
+                    contractAmount: 127.4,
+                    betCategory: "POSITION",
+                    position: "A",
+                    betType: "EXACT_NUMBER",
+                    betChoice: "3",
+                },
+            }),
+            prisma.motoBet.create({
+                data: {
+                    userId: player.id,
+                    periodId: motoPeriod.id,
+                    betAmount: 140,
+                    contractAmount: 137.2,
+                    betType: "POSITION",
+                    betChoice: "8",
+                    targetPosition: "FIRST",
+                },
+            }),
+        ]);
 
         const settledPeriod = await createWingoPeriod(tracker, {
             durationSeconds: 60,
@@ -172,6 +244,33 @@ describe("Admin dashboard insights", () => {
             winAmount: 2_646,
         });
         expect(row?.user?.id).toBe(player.id);
+    });
+
+    test("all game managers receive the real-user live book", async () => {
+        const expected: Record<string, { total: number; amount: number }> = {
+            wingo: { total: 2, amount: 150 },
+            trxwingo: { total: 1, amount: 110 },
+            k3: { total: 1, amount: 120 },
+            "5d": { total: 1, amount: 130 },
+            moto: { total: 1, amount: 140 },
+        };
+
+        for (const game of ["wingo", "trxwingo", "k3", "5d", "moto"]) {
+            const response = await get(
+                "/api/v1/admin/dashboard/game-live-bets",
+                {
+                    cookie: adminCookie,
+                    query: { game, periodId: managerPeriods[game]! },
+                }
+            );
+            expect(response.status).toBe(200);
+            expect(response.headers.get("cache-control")).toBe(
+                "private, no-store"
+            );
+            expect(response.json?.total).toBe(expected[game]!.total);
+            expect(response.json?.totalBetAmount).toBe(expected[game]!.amount);
+            expect(response.json?.bets?.[0]?.user?.id).toBe(player.id);
+        }
     });
 
     test("top users supports balance and successful-withdrawal ranking", async () => {
