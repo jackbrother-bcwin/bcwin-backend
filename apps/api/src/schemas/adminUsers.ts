@@ -238,8 +238,19 @@ export const UserStatsSchema = UserItemSchema.extend({
             example: 5,
         }),
         totalCommission: z.number().openapi({
-            description: "Total commission earned by the user",
+            description:
+                "Settled team rebate commission (backward-compatible alias)",
             example: 5000.5,
+        }),
+        totalRebateCommission: z.number().openapi({
+            description:
+                "Total settled team rebate commission earned by the user",
+            example: 5000.5,
+        }),
+        totalSalaryReceived: z.number().openapi({
+            description:
+                "Total manual, scheduled, and approved automatic salary credited to the user",
+            example: 2500,
         }),
         totalRecharge: z.number().openapi({
             description: "Total recharge amount",

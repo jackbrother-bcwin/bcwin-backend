@@ -1,6 +1,7 @@
 import { prisma, type RebateGameCategory, type User } from "@bcwin/db";
 import Logger from "@bcwin/logger";
 import { WebSocketManager } from "@bcwin/websocket";
+import { Cache, CacheKey } from "@bcwin/cache";
 import { mapGameToRebateCategory } from "./gameCategory";
 
 const logger = new Logger("rebate-calculator");
@@ -168,6 +169,13 @@ export class RebateCalculator {
                         );
                     });
 
+                    await Cache.del(CacheKey.adminUserStats(userId)).catch(
+                        (error) =>
+                            logger.warn(
+                                `Failed to clear admin user stats cache for ${userId}: ${String(error)}`
+                            )
+                    );
+
                     totalSettled += userRebates.length;
                     totalAmount += userTotalRebate;
                 } catch (error) {
@@ -181,6 +189,14 @@ export class RebateCalculator {
             logger.info(
                 `Completed rebate settlement: ${totalSettled} rebates, total ${totalAmount}`
             );
+            if (totalSettled > 0) {
+                await Cache.del(CacheKey.adminDashboardEarnings).catch(
+                    (error) =>
+                        logger.warn(
+                            `Failed to clear admin dashboard earnings cache: ${String(error)}`
+                        )
+                );
+            }
         } catch (error) {
             logger.error("Error settling unsettled rebates:", error);
         }

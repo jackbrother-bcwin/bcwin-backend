@@ -462,6 +462,8 @@ export async function approveAutoSalaryClaim(
     try {
         await Cache.del(`user:salary-dashboard:${result.userId}`);
         await Cache.del(CacheKey.userSalaryHistory(result.userId));
+        await Cache.del(CacheKey.adminUserStats(result.userId));
+        await Cache.del(CacheKey.adminDashboardEarnings);
     } catch (err) {
         logger.error("Failed to clear salary cache after approve", err);
     }

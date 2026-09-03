@@ -252,11 +252,73 @@ describe("API: user / admin / payment / gift / activity", () => {
             expect([200, 400]).toContain(res.status);
         });
 
-        test("GET /api/v1/admin/users/:id stats", async () => {
+        test("GET /api/v1/admin/users/:id stats uses rebate and all credited salary sources", async () => {
+            await Promise.all([
+                prisma.dailyCommissionSummary.create({
+                    data: {
+                        userId: user.id,
+                        date: new Date("2024-01-01T00:00:00.000Z"),
+                        totalCommission: 999,
+                    },
+                }),
+                prisma.rebate.createMany({
+                    data: [
+                        {
+                            userId: user.id,
+                            amount: 12.5,
+                            game: "WINGO",
+                            settled: true,
+                        },
+                        {
+                            userId: user.id,
+                            amount: 500,
+                            game: "WINGO",
+                            settled: false,
+                        },
+                    ],
+                }),
+                prisma.salaryPayment.create({
+                    data: {
+                        userId: user.id,
+                        amount: 40,
+                        remark: "Manual test salary",
+                    },
+                }),
+                prisma.autoSalaryClaim.createMany({
+                    data: [
+                        {
+                            userId: user.id,
+                            periodDate: new Date("2024-01-02T00:00:00.000Z"),
+                            amount: 60,
+                            slabIndex: 0,
+                            directCount: 0,
+                            activeCount: 0,
+                            teamDeposit: 0,
+                            status: "APPROVED",
+                        },
+                        {
+                            userId: user.id,
+                            periodDate: new Date("2024-01-03T00:00:00.000Z"),
+                            amount: 700,
+                            slabIndex: 0,
+                            directCount: 0,
+                            activeCount: 0,
+                            teamDeposit: 0,
+                            status: "PENDING",
+                        },
+                    ],
+                }),
+            ]);
+            await Cache.del(CacheKey.adminUserStats(user.id));
+
             const res = await get(`/api/v1/admin/users/${user.id}`, {
                 cookie: adminCookie,
             });
-            expect([200, 400, 404]).toContain(res.status);
+            expect(res.status).toBe(200);
+            const stats = res.json?.user?.stats;
+            expect(stats?.totalRebateCommission).toBe(12.5);
+            expect(stats?.totalCommission).toBe(12.5);
+            expect(stats?.totalSalaryReceived).toBe(100);
         });
 
         test("PATCH admin balance update", async () => {

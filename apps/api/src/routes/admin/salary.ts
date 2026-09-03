@@ -640,6 +640,8 @@ export const salaryRoutes = (app: OpenAPIHono) => {
                 Cache.del(CacheKey.adminSalaryRules),
                 Cache.del(CacheKey.adminSalaryStats),
                 Cache.del(CacheKey.userSalaryHistory(userId)),
+                Cache.del(CacheKey.adminUserStats(userId)),
+                Cache.del(CacheKey.adminDashboardEarnings),
             ]);
 
             logger.info("Salary rule created", {

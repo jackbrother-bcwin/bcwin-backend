@@ -1,12 +1,14 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 
 import { prisma } from "@bcwin/db";
+import { Cache, CacheKey } from "@bcwin/cache";
 import Logger from "@bcwin/logger";
 import {
     ADMIN_USER_IDENTITY_SELECT,
     mapAdminUserIdentity,
 } from "@/lib/adminUserIdentity";
 import { HTTP_STATUS } from "@/lib/http";
+import { parseYmdStartIst, shiftYmdIst, ymdIst } from "@/lib/istDate";
 import { REAL_USER_WHERE } from "@/lib/realUserFilter";
 import { apiError, CommonResponses } from "@/lib/utils";
 import { authCookie } from "@/schemas";
@@ -57,6 +59,38 @@ const getLiveWingoRoute = createRoute({
                 },
             },
             description: "Live WinGo period betting snapshots",
+        },
+        ...CommonResponses.unauthorized(),
+        ...CommonResponses.internalServerError(),
+    },
+});
+
+const dashboardEarningsSchema = z.object({
+    allTimeRebateCommission: z.number(),
+    todayRebateCommission: z.number(),
+    allTimeSalary: z.number(),
+    todaySalary: z.number(),
+    updatedAt: z.string(),
+});
+
+const getDashboardEarningsRoute = createRoute({
+    method: "get",
+    path: "/dashboard/earnings",
+    tags: ["admin"],
+    summary: "Live settled rebate commission and paid salary totals",
+    request: { cookies: authCookie },
+    responses: {
+        200: {
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        success: z.boolean(),
+                        earnings: dashboardEarningsSchema,
+                    }),
+                },
+            },
+            description:
+                "All-time and current IST-day settled rebate and paid salary totals for real users",
         },
         ...CommonResponses.unauthorized(),
         ...CommonResponses.internalServerError(),
@@ -244,6 +278,104 @@ function liveBookPayload(
 }
 
 export const dashboardInsightsRoutes = (app: OpenAPIHono) => {
+    app.openapi(getDashboardEarningsRoute, async (c) => {
+        try {
+            c.header("Cache-Control", "private, no-store");
+            const cached = await Cache.get<z.infer<typeof dashboardEarningsSchema>>(
+                CacheKey.adminDashboardEarnings
+            );
+            if (cached) {
+                return c.json(
+                    { success: true, earnings: cached },
+                    HTTP_STATUS.OK
+                );
+            }
+
+            const todayYmd = ymdIst();
+            const startOfToday = parseYmdStartIst(todayYmd);
+            const startOfTomorrow = parseYmdStartIst(
+                shiftYmdIst(todayYmd, 1)
+            );
+            const todayCreatedAt = {
+                gte: startOfToday,
+                lt: startOfTomorrow,
+            };
+
+            const [
+                allRebates,
+                todayRebates,
+                allSalaryPayments,
+                todaySalaryPayments,
+                allAutoSalary,
+                todayAutoSalary,
+            ] = await Promise.all([
+                prisma.rebate.aggregate({
+                    where: { settled: true, user: REAL_USER_WHERE },
+                    _sum: { amount: true },
+                }),
+                prisma.rebate.aggregate({
+                    where: {
+                        settled: true,
+                        createdAt: todayCreatedAt,
+                        user: REAL_USER_WHERE,
+                    },
+                    _sum: { amount: true },
+                }),
+                prisma.salaryPayment.aggregate({
+                    where: { user: REAL_USER_WHERE },
+                    _sum: { amount: true },
+                }),
+                prisma.salaryPayment.aggregate({
+                    where: {
+                        createdAt: todayCreatedAt,
+                        user: REAL_USER_WHERE,
+                    },
+                    _sum: { amount: true },
+                }),
+                prisma.autoSalaryClaim.aggregate({
+                    where: { status: "APPROVED", user: REAL_USER_WHERE },
+                    _sum: { amount: true },
+                }),
+                prisma.autoSalaryClaim.aggregate({
+                    where: {
+                        status: "APPROVED",
+                        reviewedAt: todayCreatedAt,
+                        user: REAL_USER_WHERE,
+                    },
+                    _sum: { amount: true },
+                }),
+            ]);
+
+            const earnings = {
+                allTimeRebateCommission: allRebates._sum.amount ?? 0,
+                todayRebateCommission: todayRebates._sum.amount ?? 0,
+                allTimeSalary:
+                    (allSalaryPayments._sum.amount ?? 0) +
+                    (allAutoSalary._sum.amount ?? 0),
+                todaySalary:
+                    (todaySalaryPayments._sum.amount ?? 0) +
+                    (todayAutoSalary._sum.amount ?? 0),
+                updatedAt: new Date().toISOString(),
+            };
+
+            // Tiny shared cache protects the DB when several admins have the
+            // dashboard open. Payment paths invalidate it immediately.
+            await Cache.set(CacheKey.adminDashboardEarnings, earnings, 2);
+
+            return c.json(
+                { success: true, earnings },
+                HTTP_STATUS.OK
+            );
+        } catch (error) {
+            logger.error("Failed to load dashboard earnings", error);
+            return apiError(
+                c,
+                "Failed to load dashboard earnings",
+                HTTP_STATUS.INTERNAL_SERVER_ERROR
+            );
+        }
+    });
+
     app.openapi(getLiveWingoRoute, async (c) => {
         try {
             c.header("Cache-Control", "private, no-store");

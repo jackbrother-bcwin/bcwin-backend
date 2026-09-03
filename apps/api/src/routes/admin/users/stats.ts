@@ -86,21 +86,39 @@ export const statsRoutes = (app: OpenAPIHono) => {
                 return apiError(c, "User not found", HTTP_STATUS.BAD_REQUEST);
             }
 
-            // Get total commission from DailyCommissionSummary
-            const commissionData =
-                await prisma.dailyCommissionSummary.aggregate({
-                    where: {
-                        userId: id,
-                    },
-                    _sum: {
-                        totalCommission: true,
-                    },
-                });
+            const [rebateData, manualSalaryData, autoSalaryData, stats] =
+                await Promise.all([
+                    // Match the user-facing Agency Hub: credited team rebate only.
+                    prisma.rebate.aggregate({
+                        where: {
+                            userId: id,
+                            settled: true,
+                        },
+                        _sum: {
+                            amount: true,
+                        },
+                    }),
+                    // Manual and scheduled salary credits are recorded here.
+                    prisma.salaryPayment.aggregate({
+                        where: { userId: id },
+                        _sum: { amount: true },
+                    }),
+                    // Approved automatic salaries credit balance without a SalaryPayment row.
+                    prisma.autoSalaryClaim.aggregate({
+                        where: {
+                            userId: id,
+                            status: "APPROVED",
+                        },
+                        _sum: { amount: true },
+                    }),
+                    calculateUserStats(id),
+                ]);
 
-            const totalCommission = commissionData._sum.totalCommission || 0;
+            const totalRebateCommission = rebateData._sum.amount || 0;
+            const totalSalaryReceived =
+                (manualSalaryData._sum.amount || 0) +
+                (autoSalaryData._sum.amount || 0);
             const vipLevel = user.vipLevel?.currentLevel || 0;
-
-            const stats = await calculateUserStats(id);
 
             const result = {
                 user: {
@@ -120,7 +138,10 @@ export const statsRoutes = (app: OpenAPIHono) => {
                     bank: user.bank,
                     stats: {
                         vipLevel,
-                        totalCommission,
+                        // Backward-compatible alias for older admin frontend deployments.
+                        totalCommission: totalRebateCommission,
+                        totalRebateCommission,
+                        totalSalaryReceived,
                         ...stats,
                     },
                 },

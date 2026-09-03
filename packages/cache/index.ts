@@ -232,8 +232,11 @@ export class CacheKey {
 
     /** v3: real USER + SUCCESS today recharge/withdraw (ADR-0024) */
     static adminOverview = "admin:overview:v3";
+    /** Live dashboard settled rebate and paid salary totals (2-second TTL). */
+    static adminDashboardEarnings = "admin:dashboard-earnings:v1";
     static adminGifts = "admin:gifts";
-    static adminUserStats = (userId: string) => `admin:user-stats:${userId}`;
+    /** v2: settled team rebate + all credited salary totals. */
+    static adminUserStats = (userId: string) => `admin:user-stats:v2:${userId}`;
     static adminWithdrawals = "admin:withdrawals";
     static adminDeposits = "admin:deposits";
     static adminUsers = "admin:users";

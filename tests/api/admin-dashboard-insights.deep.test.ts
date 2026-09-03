@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
 import { prisma } from "@bcwin/db";
+import { Cache, CacheKey } from "@bcwin/cache";
 import {
     FixtureTracker,
     authCookieFor,
@@ -244,6 +245,108 @@ describe("Admin dashboard insights", () => {
             winAmount: 2_646,
         });
         expect(row?.user?.id).toBe(player.id);
+    });
+
+    test("earnings cards return live settled rebate and paid salary totals", async () => {
+        await Cache.del(CacheKey.adminDashboardEarnings);
+        const before = await get("/api/v1/admin/dashboard/earnings", {
+            cookie: adminCookie,
+        });
+        expect(before.status).toBe(200);
+        expect(before.headers.get("cache-control")).toBe("private, no-store");
+
+        const now = new Date();
+        const old = new Date("2020-01-01T00:00:00.000Z");
+        await Promise.all([
+            prisma.rebate.createMany({
+                data: [
+                    {
+                        userId: player.id,
+                        amount: 12.5,
+                        game: "WINGO",
+                        settled: true,
+                        createdAt: now,
+                    },
+                    {
+                        userId: player.id,
+                        amount: 20,
+                        game: "K3",
+                        settled: true,
+                        createdAt: old,
+                    },
+                    {
+                        userId: player.id,
+                        amount: 500,
+                        game: "WINGO",
+                        settled: false,
+                        createdAt: now,
+                    },
+                ],
+            }),
+            prisma.salaryPayment.createMany({
+                data: [
+                    { userId: player.id, amount: 40, createdAt: now },
+                    { userId: player.id, amount: 10, createdAt: old },
+                ],
+            }),
+            prisma.autoSalaryClaim.createMany({
+                data: [
+                    {
+                        userId: player.id,
+                        periodDate: new Date("2098-01-01T00:00:00.000Z"),
+                        amount: 60,
+                        slabIndex: 1,
+                        directCount: 1,
+                        activeCount: 1,
+                        teamDeposit: 1,
+                        status: "APPROVED",
+                        reviewedAt: now,
+                    },
+                    {
+                        userId: player.id,
+                        periodDate: new Date("2098-01-02T00:00:00.000Z"),
+                        amount: 20,
+                        slabIndex: 1,
+                        directCount: 1,
+                        activeCount: 1,
+                        teamDeposit: 1,
+                        status: "APPROVED",
+                        reviewedAt: old,
+                    },
+                    {
+                        userId: player.id,
+                        periodDate: new Date("2098-01-03T00:00:00.000Z"),
+                        amount: 700,
+                        slabIndex: 1,
+                        directCount: 1,
+                        activeCount: 1,
+                        teamDeposit: 1,
+                        status: "PENDING",
+                    },
+                ],
+            }),
+        ]);
+
+        await Cache.del(CacheKey.adminDashboardEarnings);
+        const after = await get("/api/v1/admin/dashboard/earnings", {
+            cookie: adminCookie,
+        });
+        expect(after.status).toBe(200);
+
+        const beforeTotals = before.json?.earnings;
+        const afterTotals = after.json?.earnings;
+        expect(
+            afterTotals?.allTimeRebateCommission -
+                beforeTotals?.allTimeRebateCommission
+        ).toBe(32.5);
+        expect(
+            afterTotals?.todayRebateCommission -
+                beforeTotals?.todayRebateCommission
+        ).toBe(12.5);
+        expect(afterTotals?.allTimeSalary - beforeTotals?.allTimeSalary).toBe(
+            130
+        );
+        expect(afterTotals?.todaySalary - beforeTotals?.todaySalary).toBe(100);
     });
 
     test("all game managers receive the real-user live book", async () => {

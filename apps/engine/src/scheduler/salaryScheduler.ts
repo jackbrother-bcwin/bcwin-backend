@@ -181,7 +181,10 @@ export class SalaryScheduler {
                 });
 
                 // Invalidate user salary cache
-                await Cache.del(CacheKey.userSalaryHistory(rule.userId));
+                await Promise.all([
+                    Cache.del(CacheKey.userSalaryHistory(rule.userId)),
+                    Cache.del(CacheKey.adminUserStats(rule.userId)),
+                ]);
             } catch (error) {
                 logger.error(
                     `Failed to process salary for rule ${rule.id}:`,
@@ -195,6 +198,7 @@ export class SalaryScheduler {
         await Promise.all([
             Cache.del(CacheKey.adminSalaryRules),
             Cache.del(CacheKey.adminSalaryStats),
+            Cache.del(CacheKey.adminDashboardEarnings),
         ]);
 
         logger.info("Salary processing cycle complete.");
