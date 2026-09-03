@@ -3,6 +3,7 @@ import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 import { prisma } from "@bcwin/db";
 import { Cache, CacheKey } from "@bcwin/cache";
 import Logger from "@bcwin/logger";
+import { DailyTeamRebate } from "@bcwin/rebate";
 import {
     ADMIN_USER_IDENTITY_SELECT,
     mapAdminUserIdentity,
@@ -303,7 +304,7 @@ export const dashboardInsightsRoutes = (app: OpenAPIHono) => {
 
             const [
                 allRebates,
-                todayRebates,
+                todayRebateCommission,
                 allSalaryPayments,
                 todaySalaryPayments,
                 allAutoSalary,
@@ -313,16 +314,7 @@ export const dashboardInsightsRoutes = (app: OpenAPIHono) => {
                     where: { settled: true, user: REAL_USER_WHERE },
                     _sum: { amount: true },
                 }),
-                prisma.rebate.aggregate({
-                    where: {
-                        // Today's commission accrues during the day and is
-                        // only settled after the day closes.
-                        settled: false,
-                        createdAt: todayCreatedAt,
-                        user: REAL_USER_WHERE,
-                    },
-                    _sum: { amount: true },
-                }),
+                DailyTeamRebate.previewTotalForAllUsers(todayYmd),
                 prisma.salaryPayment.aggregate({
                     where: { user: REAL_USER_WHERE },
                     _sum: { amount: true },
@@ -350,7 +342,7 @@ export const dashboardInsightsRoutes = (app: OpenAPIHono) => {
 
             const earnings = {
                 allTimeRebateCommission: allRebates._sum.amount ?? 0,
-                todayRebateCommission: todayRebates._sum.amount ?? 0,
+                todayRebateCommission,
                 allTimeSalary:
                     (allSalaryPayments._sum.amount ?? 0) +
                     (allAutoSalary._sum.amount ?? 0),

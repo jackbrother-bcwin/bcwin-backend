@@ -247,7 +247,7 @@ describe("Admin dashboard insights", () => {
         expect(row?.user?.id).toBe(player.id);
     });
 
-    test("earnings cards separate settled lifetime and unsettled today rebate", async () => {
+    test("earnings cards separate settled lifetime and live today preview", async () => {
         await Cache.del(CacheKey.adminDashboardEarnings);
         const before = await get("/api/v1/admin/dashboard/earnings", {
             cookie: adminCookie,
@@ -342,7 +342,7 @@ describe("Admin dashboard insights", () => {
         expect(
             afterTotals?.todayRebateCommission -
                 beforeTotals?.todayRebateCommission
-        ).toBe(500);
+        ).toBe(0);
         expect(afterTotals?.allTimeSalary - beforeTotals?.allTimeSalary).toBe(
             130
         );

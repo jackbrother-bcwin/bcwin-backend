@@ -4,7 +4,12 @@
  * downline bets → credit wallet once at the following 00:00 IST.
  * Level is not sticky; it is 0 until the next close.
  */
-import { prisma, type RebateGameCategory, PaymentOrderStatus } from "@bcwin/db";
+import {
+    prisma,
+    type RebateGameCategory,
+    PaymentOrderStatus,
+    type Role,
+} from "@bcwin/db";
 import Logger from "@bcwin/logger";
 import { mapGameToRebateCategory } from "./gameCategory";
 import { RebateCalculator } from "./rebateCalculator";
@@ -69,6 +74,19 @@ type DayBet = {
     betId: string;
     createdAt: Date;
     inoutCategory?: string | null;
+};
+
+type DayBetVolume = {
+    bettorId: string;
+    betAmount: number;
+    game: string;
+    inoutCategory?: string | null;
+};
+
+type UplineRef = {
+    id: string;
+    layer: number;
+    role: Role;
 };
 
 export function istDayRange(ymd: string): DayRange {
@@ -281,6 +299,116 @@ export class DailyTeamRebate {
             ),
             people,
         };
+    }
+
+    /**
+     * Sum the same live preview shown to individual users across all real
+     * USER receivers. Events and referral chains are loaded in batches so the
+     * admin dashboard does not run one preview query tree per account.
+     */
+    static async previewTotalForAllUsers(ymd: string): Promise<number> {
+        const range = istDayRange(ymd);
+        const [bets, joinedUsers, deposits, requirements, rateRows] =
+            await Promise.all([
+                this.loadBetVolumes(range),
+                prisma.user.findMany({
+                    where: { isDemo: false, createdAt: range },
+                    select: { id: true },
+                }),
+                prisma.deposit.groupBy({
+                    by: ["userId"],
+                    where: {
+                        status: PaymentOrderStatus.SUCCESS,
+                        createdAt: range,
+                        user: { isDemo: false },
+                    },
+                    _sum: { amount: true },
+                }),
+                prisma.vipLevelRequirement.findMany({
+                    orderBy: { level: "desc" },
+                }),
+                prisma.rebateRateConfig.findMany(),
+            ]);
+
+        const eventUserIds = [
+            ...bets.map((bet) => bet.bettorId),
+            ...joinedUsers.map((user) => user.id),
+            ...deposits.map((deposit) => deposit.userId),
+        ];
+        const chains = await this.uplineChainsForUsers(eventUserIds);
+        const metrics = new Map<string, DailyTeamMetrics>();
+
+        const addMetric = (
+            sourceUserId: string,
+            field: keyof DailyTeamMetrics,
+            amount: number
+        ) => {
+            for (const upline of chains.get(sourceUserId) ?? []) {
+                if (upline.role !== "USER") continue;
+                const current = metrics.get(upline.id) ?? {
+                    teamSize: 0,
+                    teamBetting: 0,
+                    teamDeposit: 0,
+                };
+                current[field] += amount;
+                metrics.set(upline.id, current);
+            }
+        };
+
+        for (const user of joinedUsers) {
+            addMetric(user.id, "teamSize", 1);
+        }
+        for (const deposit of deposits) {
+            addMetric(
+                deposit.userId,
+                "teamDeposit",
+                deposit._sum.amount ?? 0
+            );
+        }
+        for (const bet of bets) {
+            addMetric(bet.bettorId, "teamBetting", bet.betAmount);
+        }
+
+        const levelByReceiver = new Map<string, number>();
+        for (const [receiverId, values] of metrics) {
+            const qualified = requirements.find(
+                (requirement) =>
+                    values.teamSize >= requirement.teamSize &&
+                    values.teamBetting >= requirement.teamBetting &&
+                    values.teamDeposit >= requirement.teamDeposit
+            );
+            levelByReceiver.set(receiverId, qualified?.level ?? 0);
+        }
+
+        const rates = new Map(
+            rateRows.map((row) => [
+                `${row.vipLevel}:${row.category}`,
+                row,
+            ])
+        );
+        let totalCommission = 0;
+        for (const bet of bets) {
+            const category = mapGameToRebateCategory(
+                bet.game,
+                bet.inoutCategory
+            );
+            for (const upline of chains.get(bet.bettorId) ?? []) {
+                if (upline.role !== "USER") continue;
+                const level = levelByReceiver.get(upline.id) ?? 0;
+                const rateRow = rates.get(`${level}:${category}`);
+                const layerKey = `layer${upline.layer}` as
+                    | "layer1"
+                    | "layer2"
+                    | "layer3"
+                    | "layer4"
+                    | "layer5"
+                    | "layer6";
+                const rate = Number(rateRow?.[layerKey] ?? 0);
+                totalCommission += bet.betAmount * (rate / 100);
+            }
+        }
+
+        return round3(totalCommission);
     }
 
     /** Paginated live today bets for one downline (not Rebate rows). */
@@ -757,6 +885,146 @@ export class DailyTeamRebate {
             });
         }
         return out;
+    }
+
+    private static async loadBetVolumes(
+        range: DayRange
+    ): Promise<DayBetVolume[]> {
+        const where = {
+            createdAt: range,
+            user: { isDemo: false },
+        };
+        const [wingo, fiveD, k3, moto, trxWingo, inout] = await Promise.all([
+            prisma.wingoBet.groupBy({
+                by: ["userId"],
+                where,
+                _sum: { betAmount: true },
+            }),
+            prisma.fiveDBet.groupBy({
+                by: ["userId"],
+                where,
+                _sum: { betAmount: true },
+            }),
+            prisma.k3Bet.groupBy({
+                by: ["userId"],
+                where,
+                _sum: { betAmount: true },
+            }),
+            prisma.motoBet.groupBy({
+                by: ["userId"],
+                where,
+                _sum: { betAmount: true },
+            }),
+            prisma.trxWingoBet.groupBy({
+                by: ["userId"],
+                where,
+                _sum: { betAmount: true },
+            }),
+            prisma.inoutBet.groupBy({
+                by: ["userId", "gameMode"],
+                where: { ...where, isRolledback: false },
+                _sum: { betAmount: true },
+            }),
+        ]);
+
+        const volumes: DayBetVolume[] = [];
+        const add = (
+            rows: Array<{ userId: string; _sum: { betAmount: number | null } }>,
+            game: string
+        ) => {
+            for (const row of rows) {
+                const betAmount = row._sum.betAmount ?? 0;
+                if (betAmount > 0) {
+                    volumes.push({ bettorId: row.userId, betAmount, game });
+                }
+            }
+        };
+        add(wingo, "WINGO");
+        add(fiveD, "5D");
+        add(k3, "K3");
+        add(moto, "MOTO");
+        add(trxWingo, "TRXWINGO");
+
+        const gameModes = [...new Set(inout.map((row) => row.gameMode))];
+        const inoutGames = gameModes.length
+            ? await prisma.inoutGame.findMany({
+                  where: { gameMode: { in: gameModes } },
+                  select: { gameMode: true, category: true },
+              })
+            : [];
+        const categoryByMode = new Map(
+            inoutGames.map((game) => [game.gameMode, game.category])
+        );
+        for (const row of inout) {
+            const betAmount = row._sum.betAmount ?? 0;
+            if (betAmount <= 0) continue;
+            volumes.push({
+                bettorId: row.userId,
+                betAmount,
+                game: "INOUT",
+                inoutCategory: categoryByMode.get(row.gameMode) ?? null,
+            });
+        }
+
+        return volumes;
+    }
+
+    private static async uplineChainsForUsers(
+        userIds: string[]
+    ): Promise<Map<string, UplineRef[]>> {
+        const uniqueIds = [...new Set(userIds)];
+        const chains = new Map<string, UplineRef[]>(
+            uniqueIds.map((id) => [id, []])
+        );
+        let currentBySource = new Map(
+            uniqueIds.map((id) => [id, id] as const)
+        );
+
+        for (let layer = 1; layer <= 6 && currentBySource.size > 0; layer++) {
+            const currentUsers = await prisma.user.findMany({
+                where: { id: { in: [...new Set(currentBySource.values())] } },
+                select: { id: true, referredBy: true },
+            });
+            const referralByUserId = new Map(
+                currentUsers.map((user) => [user.id, user.referredBy])
+            );
+            const referralCodes = [
+                ...new Set(
+                    currentUsers.flatMap((user) =>
+                        user.referredBy ? [user.referredBy] : []
+                    )
+                ),
+            ];
+            if (referralCodes.length === 0) break;
+
+            const parents = await prisma.user.findMany({
+                where: {
+                    referralCode: { in: referralCodes },
+                    isDemo: false,
+                },
+                select: { id: true, referralCode: true, role: true },
+            });
+            const parentByReferralCode = new Map(
+                parents.map((parent) => [parent.referralCode, parent])
+            );
+            const nextBySource = new Map<string, string>();
+
+            for (const [sourceId, currentId] of currentBySource) {
+                const referralCode = referralByUserId.get(currentId);
+                if (!referralCode) continue;
+                const parent = parentByReferralCode.get(referralCode);
+                if (!parent) continue;
+                chains.get(sourceId)!.push({
+                    id: parent.id,
+                    layer,
+                    role: parent.role,
+                });
+                nextBySource.set(sourceId, parent.id);
+            }
+            currentBySource = nextBySource;
+        }
+
+        return chains;
     }
 }
 

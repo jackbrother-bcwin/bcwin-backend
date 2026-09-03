@@ -126,6 +126,37 @@ describe("Daily team rebate (ADR-0036)", () => {
         expect(Number(u?.balance ?? 0)).toBe(0);
     });
 
+    test("batched admin total tracks the same live user preview", async () => {
+        const beforeUser = await DailyTeamRebate.previewForUser(
+            parent.id,
+            today
+        );
+        const beforeTotal = await DailyTeamRebate.previewTotalForAllUsers(today);
+
+        await prisma.wingoBet.create({
+            data: {
+                userId: l1s[0]!.id,
+                periodId,
+                betAmount: 123,
+                contractAmount: 120.54,
+                betType: "COLOR",
+                betChoice: "GREEN",
+                createdAt: new Date(range.gte.getTime() + 4 * 3600_000),
+            },
+        });
+
+        const afterUser = await DailyTeamRebate.previewForUser(
+            parent.id,
+            today
+        );
+        const afterTotal = await DailyTeamRebate.previewTotalForAllUsers(today);
+        const userIncrease = afterUser.totalCommission - beforeUser.totalCommission;
+        const totalIncrease = afterTotal - beforeTotal;
+
+        expect(userIncrease).toBeGreaterThan(0);
+        expect(totalIncrease).toBeCloseTo(userIncrease, 3);
+    });
+
     test("close job credits once, stamps TX day, then rebateLevel is 0", async () => {
         const before = await prisma.user.findUnique({
             where: { id: parent.id },
