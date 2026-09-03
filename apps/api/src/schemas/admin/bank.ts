@@ -3,8 +3,8 @@ import { bankDetailsFields } from "../bankDetails";
 
 export const searchUserBankQuerySchema = z.object({
     search: z.string().openapi({
-        description: "Search by user ID, username, or mobile number",
-        example: "1001",
+        description: "Search by mobile, username, UUID, or exact serial prefixed with #",
+        example: "#1001",
     }),
 });
 

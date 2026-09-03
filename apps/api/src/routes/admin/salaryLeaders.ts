@@ -34,7 +34,7 @@ const ListSalaryLeadersQuerySchema = z.object({
     limit: z.coerce.number().int().min(1).max(100).optional().default(20),
     search: z.string().max(100).optional().openapi({
         description:
-            "Search by serial, user ID, username, mobile number, email, or referral code",
+            "Search by mobile, username, email/referral code, UUID, or exact serial prefixed with #",
     }),
 });
 

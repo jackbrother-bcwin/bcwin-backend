@@ -16,7 +16,7 @@ const GetAgentsQuerySchema = z.object({
     page,
     limit,
     search: z.string().optional().openapi({
-        description: "Search by serial, username, mobile, email, or referral code",
+        description: "Search by mobile, username, email/referral code, or exact serial prefixed with #",
         example: "9876543210",
     }),
 });
@@ -75,7 +75,7 @@ export const listRoutes = (app: OpenAPIHono) => {
 
             // Check cache using hash-based caching
             const mainCacheKey = CacheKey.adminAgents;
-            const fieldKey = `v2-search:${normalizedSearch || "none"}-page:${page}-limit:${limit}`;
+            const fieldKey = `v3-search:${normalizedSearch || "none"}-page:${page}-limit:${limit}`;
 
             const cachedData = await Cache.hget<{
                 agents: Array<{

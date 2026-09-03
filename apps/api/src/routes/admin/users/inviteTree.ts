@@ -7,11 +7,7 @@ import { apiError, CommonResponses } from "@/lib/utils";
 import { authCookie } from "@/schemas";
 import { prisma } from "@bcwin/db";
 import { getTeamMembers } from "./helpers";
-import {
-    adminMobileSearchValues,
-    adminUserSearchOr,
-    normalizeAdminUserSearch,
-} from "@/lib/adminUserSearch";
+import { adminMobileSearchValues, adminUserSearchOr } from "@/lib/adminUserSearch";
 
 const logger = new Logger("admin-invite-tree");
 
@@ -78,8 +74,8 @@ const getInviteTreeRoute = createRoute({
             }),
             search: z.string().optional().openapi({
                 description:
-                    "Smart lookup: UUID, serial, mobile, username, or referral code",
-                example: "8400",
+                    "Smart lookup: UUID, mobile, username/referral code, or exact serial prefixed with #",
+                example: "#8400",
             }),
             layer: z
                 .string()
@@ -145,64 +141,10 @@ export const inviteTreeRoutes = (app: OpenAPIHono) => {
             const resolveSearch = async (raw: string): Promise<RootUser | null> => {
                 const q = raw.trim();
                 if (!q) return null;
-
-                // UUID
-                if (
-                    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-                        q
-                    )
-                ) {
-                    return prisma.user.findUnique({
-                        where: { id: q },
-                        select: rootUserSelect,
-                    });
-                }
-
-                // Mobile input may be local 10 digits, country-prefixed, or spaced.
-                const mobileCandidates = adminMobileSearchValues(q);
-                if (mobileCandidates.some((mobile) => mobile.length >= 10)) {
-                    const byMobile = await prisma.user.findFirst({
-                        where: {
-                            OR: mobileCandidates.map((mobile) => ({
-                                mobileNumber: { contains: mobile },
-                            })),
-                        },
-                        select: rootUserSelect,
-                    });
-                    if (byMobile) return byMobile;
-                }
-
-                // Serial number (must fit PostgreSQL Int: -2,147,483,648 … 2,147,483,647)
-                if (/^\d+$/.test(q)) {
-                    const sn = parseInt(q, 10);
-                    if (!isNaN(sn) && sn >= -2147483648 && sn <= 2147483647) {
-                        const bySerial = await prisma.user.findUnique({
-                            where: { serialNumber: sn },
-                            select: rootUserSelect,
-                        });
-                        if (bySerial) return bySerial;
-                    }
-                    // Out-of-range number — skip serial lookup, fall through to username/code
-                }
-
-                // Username (exact, case-insensitive)
-                const byUsername = await prisma.user.findFirst({
-                    where: {
-                        username: { equals: q, mode: "insensitive" },
-                    },
-                    select: rootUserSelect,
-                });
-                if (byUsername) return byUsername;
-
-                // Referral code (exact)
-                const byCode = await prisma.user.findFirst({
-                    where: { referralCode: q },
-                    select: rootUserSelect,
-                });
-                if (byCode) return byCode;
-
+                const searchClauses = adminUserSearchOr(q);
+                if (!searchClauses.length) return null;
                 return prisma.user.findFirst({
-                    where: { OR: adminUserSearchOr(normalizeAdminUserSearch(q)) },
+                    where: { OR: searchClauses },
                     select: rootUserSelect,
                 });
             };

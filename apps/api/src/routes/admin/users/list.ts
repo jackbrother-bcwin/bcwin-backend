@@ -57,7 +57,7 @@ export const listRoutes = (app: OpenAPIHono) => {
 
             // Check cache using hash-based caching
             const mainCacheKey = CacheKey.adminUsers;
-            const fieldKey = `v2-search:${normalizedSearch || "none"}-banned:${
+            const fieldKey = `v3-search:${normalizedSearch || "none"}-banned:${
                 isBanned || "all"
             }-penalty:${hasIllegalBetPenalty || "all"}-role:${
                 role || "all"

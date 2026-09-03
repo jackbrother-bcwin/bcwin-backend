@@ -190,7 +190,7 @@ const listClaimsRoute = createRoute({
                 .optional()
                 .openapi({ description: "IST day YYYY-MM-DD" }),
             search: z.string().optional().openapi({
-                description: "Serial, username, mobile, or user id",
+                description: "Mobile, username, UUID, or exact serial prefixed with #",
             }),
         }),
     },

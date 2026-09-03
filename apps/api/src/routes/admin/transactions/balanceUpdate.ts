@@ -21,8 +21,8 @@ const GetBalanceTransactionsQuerySchema = z.object({
     limit,
     search: z.string().optional().openapi({
         description:
-            "Filter by user ID (uuid), serial number, username, or mobile number",
-        example: "10009",
+            "Filter by UUID, mobile, username, or exact serial prefixed with #",
+        example: "#10009",
     }),
 });
 
@@ -141,7 +141,7 @@ export const balanceTransactionRoutes = (app: OpenAPIHono) => {
 
             // Check cache using hash-based caching
             const mainCacheKey = CacheKey.adminBalanceTransactions;
-            const fieldKey = `v4-search:${
+            const fieldKey = `v5-search:${
                 normalizedSearch || "all"
             }-page:${page}-limit:${limit}`;
 

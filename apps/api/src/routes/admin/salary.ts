@@ -93,8 +93,8 @@ const listRulesRoute = createRoute({
             }),
             search: z.string().optional().openapi({
                 description:
-                    "Search by user ID (serial number), username, or phone number",
-                example: "10009",
+                    "Search by username, phone number, or exact serial prefixed with #",
+                example: "#10009",
             }),
         }),
         cookies: authCookie,
