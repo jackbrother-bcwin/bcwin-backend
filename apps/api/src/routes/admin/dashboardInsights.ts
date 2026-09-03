@@ -90,7 +90,7 @@ const getDashboardEarningsRoute = createRoute({
                 },
             },
             description:
-                "All-time and current IST-day settled rebate and paid salary totals for real users",
+                "All-time settled rebate, current IST-day unsettled rebate, and paid salary totals for real users",
         },
         ...CommonResponses.unauthorized(),
         ...CommonResponses.internalServerError(),
@@ -315,7 +315,9 @@ export const dashboardInsightsRoutes = (app: OpenAPIHono) => {
                 }),
                 prisma.rebate.aggregate({
                     where: {
-                        settled: true,
+                        // Today's commission accrues during the day and is
+                        // only settled after the day closes.
+                        settled: false,
                         createdAt: todayCreatedAt,
                         user: REAL_USER_WHERE,
                     },
