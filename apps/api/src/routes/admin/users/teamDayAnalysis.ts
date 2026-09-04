@@ -20,7 +20,7 @@ const ID_CHUNK = 2000;
 const PAGE_SIZE = 25;
 const CACHE_TTL_SECONDS = 5 * 60;
 
-type SortMetric = "deposit" | "withdrawal" | "bet";
+export type SortMetric = "deposit" | "withdrawal" | "bet";
 type Metric = { count: number; amount: number };
 type MetricSet = {
     memberCount: number;
@@ -46,7 +46,7 @@ type LegCore = MetricSet & {
     serialNumber: number;
 };
 
-type AnalysisCore = {
+export type AnalysisCore = {
     date: string;
     self: MetricSet;
     team: MetricSet;
@@ -355,9 +355,10 @@ function userMetricSet(
     };
 }
 
-async function computeAnalysisCore(
+export async function computeAnalysisCore(
     root: { id: string; referralCode: string; isDemo: boolean },
-    date: string
+    date: string,
+    includeBets = true
 ): Promise<AnalysisCore> {
     const levels = Array.from({ length: 6 }, (_, index) => ({
         level: index + 1,
@@ -381,7 +382,9 @@ async function computeAnalysisCore(
     const [deposits, withdrawals, bets] = await Promise.all([
         moneyStatsByUser("deposit", userIds, gte, lt),
         moneyStatsByUser("withdrawal", userIds, gte, lt),
-        betStatsByUser(userIds, gte, lt),
+        includeBets
+            ? betStatsByUser(userIds, gte, lt)
+            : Promise.resolve(new Map<string, Metric>()),
     ]);
 
     const self = userMetricSet(root.id, deposits, withdrawals, bets);
@@ -428,7 +431,7 @@ function metricWithShare(metric: Metric, total: Metric) {
     return { ...metric, share: share(metric.amount, total.amount) };
 }
 
-function decorateLeg(leg: LegCore, team: MetricSet) {
+export function decorateLeg(leg: LegCore, team: MetricSet) {
     return {
         ...leg,
         deposit: metricWithShare(leg.deposit, team.deposit),
@@ -437,7 +440,7 @@ function decorateLeg(leg: LegCore, team: MetricSet) {
     };
 }
 
-function sortLegs(
+export function sortLegs(
     legs: ReturnType<typeof decorateLeg>[],
     sortBy: SortMetric
 ) {

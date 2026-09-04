@@ -41,6 +41,21 @@ describe("Auto salary paused", () => {
         expect(String(res.json?.error ?? "")).toBe(AUTO_SALARY_PAUSED_MESSAGE);
     });
 
+    test("read-only team business report remains available", async () => {
+        const res = await get("/api/v1/user/salary/business-report", {
+            cookie,
+            query: { day: "today", sortBy: "deposit", page: 1, limit: 10 },
+        });
+        expect(res.status).toBe(200);
+        expect(res.json?.success).toBe(true);
+        expect(res.json?.team).toEqual({
+            l1Count: 0,
+            deposit: 0,
+            withdrawal: 0,
+        });
+        expect(res.json?.legs).toEqual([]);
+    });
+
     test("credited-only history still serves (transaction ledger)", async () => {
         const res = await get("/api/v1/user/salary", {
             cookie,

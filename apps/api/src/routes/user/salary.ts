@@ -19,6 +19,12 @@ import {
 } from "@/lib/autoSalaryService";
 import { TeamMetricsCalculator } from "@/lib/teamMetricsCalculator";
 import { rejectIfAutoSalaryPaused } from "@/lib/autoSalaryGate";
+import {
+    computeAnalysisCore,
+    decorateLeg,
+    sortLegs,
+    type AnalysisCore,
+} from "@/routes/admin/users/teamDayAnalysis";
 
 const logger = new Logger("user-salary");
 
@@ -139,6 +145,91 @@ const salaryDashboardRoute = createRoute({
             },
             description: "Salary dashboard",
         },
+        ...CommonResponses.unauthorized(),
+        ...CommonResponses.internalServerError(),
+        ...CommonResponses.serviceUnavailable(),
+    },
+});
+
+const businessMetricSchema = z.object({
+    amount: z.number(),
+    share: z.number(),
+});
+
+const salaryBusinessReportRoute = createRoute({
+    method: "get",
+    path: "/salary/business-report",
+    tags: ["user"],
+    summary: "Private Today/Yesterday salary team business report",
+    description:
+        "Authenticated user's team-only L1-L6 successful deposit/withdrawal totals and privacy-limited direct-leg contribution.",
+    request: {
+        cookies: authCookie,
+        query: z.object({
+            day: z.enum(["today", "yesterday"]).default("today"),
+            sortBy: z.enum(["deposit", "withdrawal"]).default("deposit"),
+            page: z.coerce.number().int().min(1).default(1),
+            limit: z.coerce.number().int().min(1).max(10).default(10),
+        }),
+    },
+    responses: {
+        200: {
+            content: {
+                "application/json": {
+                    schema: z.object({
+                        success: z.boolean(),
+                        day: z.enum(["today", "yesterday"]),
+                        date: z.string(),
+                        timezone: z.literal("Asia/Kolkata"),
+                        team: z.object({
+                            l1Count: z.number(),
+                            deposit: z.number(),
+                            withdrawal: z.number(),
+                        }),
+                        levels: z.array(
+                            z.object({
+                                level: z.number(),
+                                deposit: z.number(),
+                                withdrawal: z.number(),
+                            })
+                        ),
+                        concentration: z.object({
+                            status: z.enum([
+                                "none",
+                                "balanced",
+                                "concentrated",
+                            ]),
+                            threshold: z.number(),
+                            leader: z
+                                .object({
+                                    uid: z.number(),
+                                    name: z.string(),
+                                    deposit: businessMetricSchema,
+                                })
+                                .nullable(),
+                        }),
+                        legs: z.array(
+                            z.object({
+                                uid: z.number(),
+                                name: z.string(),
+                                deposit: businessMetricSchema,
+                                withdrawal: businessMetricSchema,
+                            })
+                        ),
+                        pagination: z.object({
+                            page: z.number(),
+                            limit: z.number(),
+                            total: z.number(),
+                            totalPages: z.number(),
+                        }),
+                        sortBy: z.enum(["deposit", "withdrawal"]),
+                        updatedAt: z.string(),
+                    }),
+                },
+            },
+            description: "Privacy-safe salary team business report",
+        },
+        ...CommonResponses.badRequest(),
         ...CommonResponses.unauthorized(),
         ...CommonResponses.internalServerError(),
         ...CommonResponses.serviceUnavailable(),
@@ -358,6 +449,115 @@ function howtoSteps(metrics: SalaryMetrics) {
 }
 
 export const userSalaryRoutes = (app: OpenAPIHono) => {
+    app.openapi(salaryBusinessReportRoute, async (c) => {
+        try {
+            c.header("Cache-Control", "private, no-store");
+            const user = c.get("user");
+            const { day, sortBy, page, limit } = c.req.valid("query");
+            const today = formatIstYmd(new Date());
+            const date = day === "today" ? today : shiftIstYmd(today, -1);
+
+            const root = await prisma.user.findUnique({
+                where: { id: user.id },
+                select: { id: true, referralCode: true, isDemo: true },
+            });
+            if (!root) {
+                return apiError(c, "User not found", HTTP_STATUS.BAD_REQUEST);
+            }
+
+            const cacheKey = `user:salary-business-report:v1:${user.id}:${date}`;
+            let core = await Cache.get<AnalysisCore>(cacheKey);
+            if (!core) {
+                core = await computeAnalysisCore(root, date, false);
+                await Cache.set(cacheKey, core, 10);
+            }
+
+            const allLegs = core.legs.map((leg) =>
+                decorateLeg(leg, core.team)
+            );
+            const contributingLegs = allLegs.filter(
+                (leg) =>
+                    leg.deposit.amount > 0 || leg.withdrawal.amount > 0
+            );
+            const sortedLegs = sortLegs(contributingLegs, sortBy);
+            const total = sortedLegs.length;
+            const totalPages = Math.max(1, Math.ceil(total / limit));
+            const safePage = Math.min(page, totalPages);
+            const start = (safePage - 1) * limit;
+            const pageLegs = sortedLegs.slice(start, start + limit);
+
+            const depositLeader = sortLegs(allLegs, "deposit")[0] ?? null;
+            const hasTeamDeposit = core.team.deposit.amount > 0;
+            const leader = hasTeamDeposit && depositLeader
+                ? {
+                      uid: depositLeader.serialNumber,
+                      name: depositLeader.username,
+                      deposit: {
+                          amount: depositLeader.deposit.amount,
+                          share: depositLeader.deposit.share,
+                      },
+                  }
+                : null;
+            const isConcentrated = (leader?.deposit.share ?? 0) > 80;
+
+            return c.json(
+                {
+                    success: true,
+                    day,
+                    date,
+                    timezone: "Asia/Kolkata" as const,
+                    team: {
+                        l1Count: core.levels[0]?.memberCount ?? 0,
+                        deposit: core.team.deposit.amount,
+                        withdrawal: core.team.withdrawal.amount,
+                    },
+                    levels: core.levels.map((level) => ({
+                        level: level.level,
+                        deposit: level.deposit.amount,
+                        withdrawal: level.withdrawal.amount,
+                    })),
+                    concentration: {
+                        status: !leader
+                            ? ("none" as const)
+                            : isConcentrated
+                              ? ("concentrated" as const)
+                              : ("balanced" as const),
+                        threshold: 80,
+                        leader,
+                    },
+                    legs: pageLegs.map((leg) => ({
+                        uid: leg.serialNumber,
+                        name: leg.username,
+                        deposit: {
+                            amount: leg.deposit.amount,
+                            share: leg.deposit.share,
+                        },
+                        withdrawal: {
+                            amount: leg.withdrawal.amount,
+                            share: leg.withdrawal.share,
+                        },
+                    })),
+                    pagination: {
+                        page: safePage,
+                        limit,
+                        total,
+                        totalPages,
+                    },
+                    sortBy,
+                    updatedAt: new Date().toISOString(),
+                },
+                HTTP_STATUS.OK
+            );
+        } catch (error) {
+            logger.error("salary business report", error);
+            return apiError(
+                c,
+                "Failed to load salary business report",
+                HTTP_STATUS.INTERNAL_SERVER_ERROR
+            );
+        }
+    });
+
     app.openapi(salaryDashboardRoute, async (c) => {
         const paused = rejectIfAutoSalaryPaused(c);
         if (paused) return paused;

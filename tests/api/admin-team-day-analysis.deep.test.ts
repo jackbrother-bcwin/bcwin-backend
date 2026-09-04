@@ -21,7 +21,7 @@ import {
 } from "../helpers";
 
 describe("Admin team-day L1 business contribution (ADR-0053)", () => {
-    const tracker = new FixtureTracker("team_leg");
+    const tracker = new FixtureTracker("teamleg");
     const date = shiftYmdIst(ymdIst(), -1);
     const warningDate = shiftYmdIst(date, -1);
     const dayStart = parseYmdStartIst(date);
@@ -30,6 +30,7 @@ describe("Admin team-day L1 business contribution (ADR-0053)", () => {
         `admin:user-team-day-analysis:v1:${rootId}:${ymd}`;
 
     let adminCookie: string;
+    let rootCookie: string;
     let root: Awaited<ReturnType<typeof createTestUser>>;
     let a: Awaited<ReturnType<typeof createTestUser>>;
     let b: Awaited<ReturnType<typeof createTestUser>>;
@@ -43,6 +44,7 @@ describe("Admin team-day L1 business contribution (ADR-0053)", () => {
         const admin = await createTestUser(tracker, { role: "ADMIN" });
         root = await createTestUser(tracker);
         adminCookie = await authCookieFor(admin);
+        rootCookie = await authCookieFor(root);
 
         a = await createTestUser(tracker, { referredBy: root.referralCode });
         b = await createTestUser(tracker, { referredBy: root.referralCode });
@@ -211,6 +213,9 @@ describe("Admin team-day L1 business contribution (ADR-0053)", () => {
             await Promise.all([
                 Cache.del(cacheKey(root.id, date)).catch(() => 0),
                 Cache.del(cacheKey(root.id, warningDate)).catch(() => 0),
+                Cache.del(
+                    `user:salary-business-report:v1:${root.id}:${date}`
+                ).catch(() => 0),
             ]);
         }
         await cleanupByUserIds(tracker.userIds, {
@@ -289,5 +294,55 @@ describe("Admin team-day L1 business contribution (ADR-0053)", () => {
             { cookie: adminCookie, query: { date: ymdIst() } }
         );
         expect(todayRes.status).toBe(400);
+    });
+
+    test("user salary report is team-only and privacy-limited", async () => {
+        await Cache.del(
+            `user:salary-business-report:v1:${root.id}:${date}`
+        );
+        const response = await get("/api/v1/user/salary/business-report", {
+            cookie: rootCookie,
+            query: {
+                day: "yesterday",
+                sortBy: "deposit",
+                page: 1,
+                limit: 10,
+            },
+        });
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("private, no-store");
+        expect(response.json.date).toBe(date);
+        expect(response.json.team).toEqual({
+            l1Count: 4,
+            deposit: 100_000,
+            withdrawal: 100_000,
+        });
+        expect(response.json.levels[0]).toEqual({
+            level: 1,
+            deposit: 70_000,
+            withdrawal: 100_000,
+        });
+        expect(response.json.levels[1]).toEqual({
+            level: 2,
+            deposit: 30_000,
+            withdrawal: 0,
+        });
+        expect(response.json.legs.map((leg: any) => leg.uid)).toEqual([
+            a.serialNumber,
+            b.serialNumber,
+            c.serialNumber,
+        ]);
+        expect(response.json.legs[0].deposit).toEqual({
+            amount: 50_000,
+            share: 50,
+        });
+        expect(response.json.pagination.total).toBe(3);
+
+        const serialized = JSON.stringify(response.json);
+        expect(serialized).not.toContain(a.id);
+        expect(serialized).not.toContain(a.mobileNumber);
+        expect(response.json).not.toHaveProperty("self");
+        expect(response.json.legs[0]).not.toHaveProperty("memberCount");
     });
 });

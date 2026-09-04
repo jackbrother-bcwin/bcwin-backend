@@ -51,9 +51,13 @@ export async function createTestUser(
     const n = ++mobileSeq;
     const serialNumber = await generateNextSerialNumber();
     const password = opts.password ?? "Password123!";
+    const userSuffix = `_u${n}`;
     const username =
         opts.username ??
-        `${tracker.runId}_u${n}`.replace(/[^a-zA-Z0-9_]/g, "_").slice(0, 28);
+        `${tracker.runId.slice(0, 28 - userSuffix.length)}${userSuffix}`.replace(
+            /[^a-zA-Z0-9_]/g,
+            "_"
+        );
     // E.164 unique mobile
     const mobileNumber = `91${String(9000000000 + Math.floor(Math.random() * 99999999) + n * 137).slice(0, 10)}`;
 
