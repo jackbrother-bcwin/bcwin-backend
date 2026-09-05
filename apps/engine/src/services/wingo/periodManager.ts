@@ -2,6 +2,7 @@ import { prisma } from "@bcwin/db";
 import Logger from "@bcwin/logger";
 import { WebSocketManager } from "@bcwin/websocket";
 import type { WingoPeriod } from "@bcwin/db";
+import { isAdminResultFrozen } from "@bcwin/cache";
 import {
     generatePeriodNumber,
     calculatePeriodTimes,
@@ -104,8 +105,8 @@ export class PeriodManager {
             periodId: period.id,
             periodNumber: period.periodNumber,
             durationSeconds: period.durationSeconds,
-            startTime: toIso(period.startTime),
-            endTime: toIso(period.endTime),
+            startTime: period.startTime,
+            endTime: period.endTime,
             status: "ACTIVE",
         });
     }
@@ -129,6 +130,11 @@ export class PeriodManager {
     isInLockWindow(period: WingoPeriod, now: Date = new Date()): boolean {
         const lockMs = betLockSeconds(period.durationSeconds) * 1000;
         return now.getTime() >= period.endTime.getTime() - lockMs;
+    }
+
+    /** Last 3s: persist the hidden draw. Betting was already locked. */
+    isInResultDrawWindow(period: WingoPeriod, now: Date = new Date()): boolean {
+        return isAdminResultFrozen(period.endTime, now);
     }
 
     async endExpiredPeriods(now: Date = new Date()): Promise<WingoPeriod[]> {

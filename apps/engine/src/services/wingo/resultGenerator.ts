@@ -144,7 +144,7 @@ export class ResultGenerator {
     }
 
     /**
-     * Draw and persist. Does not publish if `now < endTime` (lock-window prepare).
+     * Draw and persist. Does not publish if `now < endTime` (last-3s freeze).
      * Idempotent: already-stored result is returned unchanged (no redraw).
      */
     async processPeriodResult(

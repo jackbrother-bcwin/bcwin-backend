@@ -6,6 +6,19 @@ const logger = new Logger("result-setter");
 
 type Game = "wingo" | "moto" | "5d" | "k3";
 
+/** Last N seconds: Win Go draws and admin setResults is rejected. Bet lock stays 5s/10s. */
+export const ADMIN_RESULT_FREEZE_SECONDS = 3;
+
+export function isAdminResultFrozen(
+    endTime: Date,
+    now: Date = new Date()
+): boolean {
+    return (
+        now.getTime() >=
+        endTime.getTime() - ADMIN_RESULT_FREEZE_SECONDS * 1000
+    );
+}
+
 type WingoResult = {
     number: number;
 };
@@ -79,6 +92,19 @@ export class ResultSetter {
                     success: false,
                     message: "Period not found or not active",
                 };
+            }
+
+            if (game === "wingo") {
+                const wingo = period as {
+                    resultNumber: number | null;
+                    endTime: Date;
+                };
+                if (wingo.resultNumber != null || isAdminResultFrozen(wingo.endTime)) {
+                    return {
+                        success: false,
+                        message: "Result is frozen for this period",
+                    };
+                }
             }
 
             await this.client.set(key, JSON.stringify(result), "EX", 60 * 15); // 15 minutes

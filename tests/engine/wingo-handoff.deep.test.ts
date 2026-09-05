@@ -27,6 +27,8 @@ const SLOT_START = new Date("2099-06-01T12:00:00.000+05:30");
 const SLOT_END = new Date("2099-06-01T12:00:30.000+05:30");
 const LOCK_AT = new Date("2099-06-01T12:00:25.000+05:30");
 const PRE_LOCK = new Date("2099-06-01T12:00:24.999+05:30");
+const DRAW_AT = new Date("2099-06-01T12:00:27.000+05:30");
+const PRE_DRAW = new Date("2099-06-01T12:00:26.999+05:30");
 
 function colorSize(n: number) {
     return {
@@ -151,6 +153,23 @@ describe("Deep: Win Go lock-window handoff", () => {
             manager.isInLockWindow(
                 p60,
                 new Date("2099-06-01T12:00:50.000+05:30")
+            )
+        ).toBe(true);
+
+        expect(manager.isInResultDrawWindow(p30, LOCK_AT)).toBe(false);
+        expect(manager.isInResultDrawWindow(p30, PRE_DRAW)).toBe(false);
+        expect(manager.isInResultDrawWindow(p30, DRAW_AT)).toBe(true);
+        expect(manager.isInResultDrawWindow(p30, SLOT_END)).toBe(true);
+        expect(
+            manager.isInResultDrawWindow(
+                p60,
+                new Date("2099-06-01T12:00:56.999+05:30")
+            )
+        ).toBe(false);
+        expect(
+            manager.isInResultDrawWindow(
+                p60,
+                new Date("2099-06-01T12:00:57.000+05:30")
             )
         ).toBe(true);
     });

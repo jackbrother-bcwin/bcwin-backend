@@ -35,7 +35,7 @@ export class WingoScheduler {
     }
 
     start(): void {
-        logger.info("Starting Wingo scheduler (1s tick, lock-window prepare)...");
+        logger.info("Starting Wingo scheduler (1s tick, lock prepare, 3s draw)...");
         void this.tick();
         this.timer = setInterval(() => {
             void this.tick();
@@ -119,7 +119,10 @@ export class WingoScheduler {
         }
     }
 
-    /** Lock window: draw (hidden) + next slot row. */
+    /**
+     * Lock window: pre-create next slot (speed).
+     * Last 3s: persist hidden draw so admin can still change Redis until then.
+     */
     private async prepare(): Promise<void> {
         if (this.prepareRunning) return;
         this.prepareRunning = true;
@@ -130,18 +133,21 @@ export class WingoScheduler {
                     duration,
                     now
                 );
-                if (!live || !this.periodManager.isInLockWindow(live, now)) {
-                    continue;
+                if (!live) continue;
+                if (this.periodManager.isInLockWindow(live, now)) {
+                    await this.periodManager.ensureNextPeriod(
+                        duration,
+                        live.endTime
+                    );
                 }
-                if (live.resultNumber == null) {
+                if (
+                    live.resultNumber == null &&
+                    this.periodManager.isInResultDrawWindow(live, now)
+                ) {
                     await this.resultGenerator.processPeriodResult(live.id, {
                         publish: false,
                     });
                 }
-                await this.periodManager.ensureNextPeriod(
-                    duration,
-                    live.endTime
-                );
             }
         } catch (error) {
             logger.error("Wingo prepare failed:", error);
