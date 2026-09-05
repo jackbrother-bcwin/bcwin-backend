@@ -1,6 +1,7 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
 
 import { Cache } from "@bcwin/cache";
+import { cachedAdminRead } from "@/lib/cachedAdminRead";
 import { prisma } from "@bcwin/db";
 import Logger from "@bcwin/logger";
 import { HTTP_STATUS } from "@/lib/http";
@@ -11,12 +12,13 @@ import {
     shiftYmdIst,
     ymdIst,
 } from "@/lib/istDate";
+import { moneyStatsByUser, betStatsByUser } from "@/lib/adminUserMetrics";
 import { REAL_USER_WHERE } from "@/lib/realUserFilter";
 import { apiError, CommonResponses } from "@/lib/utils";
 import { authCookie } from "@/schemas";
 
 const logger = new Logger("admin-users-team-day-analysis");
-const ID_CHUNK = 2000;
+
 const PAGE_SIZE = 25;
 const CACHE_TTL_SECONDS = 5 * 60;
 
@@ -228,119 +230,6 @@ async function getLegMembers(rootReferralCode: string): Promise<TeamMember[]> {
     return members;
 }
 
-function mergeUserMetric(
-    target: Map<string, Metric>,
-    userId: string,
-    amount: number,
-    count: number
-) {
-    const current = target.get(userId) ?? emptyMetric();
-    current.amount += amount;
-    current.count += count;
-    target.set(userId, current);
-}
-
-async function moneyStatsByUser(
-    kind: "deposit" | "withdrawal",
-    userIds: string[],
-    gte: Date,
-    lt: Date
-): Promise<Map<string, Metric>> {
-    const result = new Map<string, Metric>();
-    for (let i = 0; i < userIds.length; i += ID_CHUNK) {
-        const ids = userIds.slice(i, i + ID_CHUNK);
-        const where = {
-            userId: { in: ids },
-            status: "SUCCESS" as const,
-            createdAt: { gte, lt },
-        };
-        const rows =
-            kind === "deposit"
-                ? await prisma.deposit.groupBy({
-                      by: ["userId"],
-                      where,
-                      _sum: { amount: true },
-                      _count: { _all: true },
-                  })
-                : await prisma.withdraw.groupBy({
-                      by: ["userId"],
-                      where,
-                      _sum: { amount: true },
-                      _count: { _all: true },
-                  });
-
-        for (const row of rows) {
-            result.set(row.userId, {
-                amount: row._sum.amount ?? 0,
-                count: row._count._all,
-            });
-        }
-    }
-    return result;
-}
-
-async function betStatsByUser(
-    userIds: string[],
-    gte: Date,
-    lt: Date
-): Promise<Map<string, Metric>> {
-    const result = new Map<string, Metric>();
-    for (let i = 0; i < userIds.length; i += ID_CHUNK) {
-        const ids = userIds.slice(i, i + ID_CHUNK);
-        const where = { userId: { in: ids }, createdAt: { gte, lt } };
-        const groups = await Promise.all([
-            prisma.wingoBet.groupBy({
-                by: ["userId"],
-                where,
-                _sum: { betAmount: true },
-                _count: { _all: true },
-            }),
-            prisma.fiveDBet.groupBy({
-                by: ["userId"],
-                where,
-                _sum: { betAmount: true },
-                _count: { _all: true },
-            }),
-            prisma.k3Bet.groupBy({
-                by: ["userId"],
-                where,
-                _sum: { betAmount: true },
-                _count: { _all: true },
-            }),
-            prisma.motoBet.groupBy({
-                by: ["userId"],
-                where,
-                _sum: { betAmount: true },
-                _count: { _all: true },
-            }),
-            prisma.trxWingoBet.groupBy({
-                by: ["userId"],
-                where,
-                _sum: { betAmount: true },
-                _count: { _all: true },
-            }),
-            prisma.inoutBet.groupBy({
-                by: ["userId"],
-                where: { ...where, isRolledback: false },
-                _sum: { betAmount: true },
-                _count: { _all: true },
-            }),
-        ]);
-
-        for (const rows of groups) {
-            for (const row of rows) {
-                mergeUserMetric(
-                    result,
-                    row.userId,
-                    row._sum.betAmount ?? 0,
-                    row._count._all
-                );
-            }
-        }
-    }
-    return result;
-}
-
 function userMetricSet(
     userId: string,
     deposits: Map<string, Metric>,
@@ -476,11 +365,8 @@ export const teamDayAnalysisRoutes = (app: OpenAPIHono) => {
             }
 
             const cacheKey = `admin:user-team-day-analysis:v1:${id}:${date}`;
-            let core = await Cache.get<AnalysisCore>(cacheKey);
-            if (!core) {
-                core = await computeAnalysisCore(root, date);
-                await Cache.set(cacheKey, core, CACHE_TTL_SECONDS);
-            }
+            const core = await cachedAdminRead(cacheKey, CACHE_TTL_SECONDS,
+                () => computeAnalysisCore(root, date));
 
             const decorated = core.legs.map((leg) => decorateLeg(leg, core.team));
             const sorted = sortLegs(decorated, sortBy);

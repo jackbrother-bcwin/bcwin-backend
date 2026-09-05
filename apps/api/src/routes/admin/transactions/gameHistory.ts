@@ -147,55 +147,43 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
 
             const skip = (page - 1) * limit;
 
-            // Check cache using hash-based caching
-            const mainCacheKey = CacheKey.adminGameHistory;
-            const fieldKey = `v4-gameName:${gameName || "all"}-wins:${wins || "all"
-                }-userId:${userId || "all"
-                }-page:${page}-limit:${limit}`;
+            // Separate keys give each page a real expiry (hash TTLs are shared).
+            const cacheKey = `${CacheKey.adminGameHistory}:v5:${JSON.stringify([gameName ?? null, wins ?? null, userId ?? null, page, limit])}`;
+            type HistoryResponse = z.infer<typeof GetGameHistoryResponseSchema>;
+            const cachedData = await Cache.get<HistoryResponse>(cacheKey);
+            if (cachedData) return c.json(cachedData, HTTP_STATUS.OK);
 
-            const cachedData = await Cache.hget<{
-                bets: Array<{
-                    id: string;
-                    majorGameType:
-                    | "WINGO"
-                    | "FIVE_D"
-                    | "K3"
-                    | "MOTO"
-                    | "TRX_WINGO"
-                    gameName: string;
-                    betAmount: number;
-                    winAmount: number;
-                    status: string;
-                    user: {
-                        id: string;
-                        serialNumber: number;
-                        username: string;
-                        mobileNumber: string;
-                    };
-                    createdAt: string;
-                    metadata?: Record<string, any>;
-                }>;
-                total: number;
-                currentPage: number;
-                totalPages: number;
-            }>(mainCacheKey, fieldKey);
-
-            if (cachedData) {
-                return c.json(
-                    {
-                        success: true,
-                        ...cachedData,
-                    },
-                    HTTP_STATUS.OK
-                );
-            }
+            const windowSize = skip + limit;
+            const nameMatches = (name: string) =>
+                !gameName || name.toLowerCase().includes(gameName.toLowerCase());
+            const lotteryWhere = (resultRelation: string, matches = true): any => ({
+                ...(userId ? { userId } : {}),
+                ...(!matches ? { id: { in: [] } } : {}),
+                ...(wins === "true"
+                    ? { [resultRelation]: { is: { winAmount: { gt: 0 } } } }
+                    : wins === "false"
+                      ? { OR: [
+                            { [resultRelation]: { is: null } },
+                            { [resultRelation]: { is: { winAmount: 0 } } },
+                        ] }
+                      : {}),
+            });
+            const durations = gameName
+                ? await prisma.wingoPeriod.groupBy({ by: ["durationSeconds"] })
+                : [];
+            const counts: Promise<number>[] = [];
 
             // Build queries for all game types
             const queries: Promise<any[]>[] = [];
 
             // Wingo bets
-            const wingoWhere: any = {};
-            if (userId) wingoWhere.userId = userId;
+            const wingoWhere = lotteryWhere("wingoBetResult");
+            if (gameName) {
+                wingoWhere.period = { durationSeconds: { in: durations
+                    .filter((row) => nameMatches(wingoGameName(row.durationSeconds)))
+                    .map((row) => row.durationSeconds) } };
+            }
+            counts.push(prisma.wingoBet.count({ where: wingoWhere }));
 
             queries.push(
                 prisma.wingoBet.findMany({
@@ -212,15 +200,14 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                         },
                         wingoBetResult: true,
                     },
-                    orderBy: {
-                        createdAt: "desc",
-                    },
+                    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+                    take: windowSize,
                 })
             );
 
             // FiveD bets
-            const fiveDWhere: any = {};
-            if (userId) fiveDWhere.userId = userId;
+            const fiveDWhere = lotteryWhere("fiveDBetResult", nameMatches("5D Lotre"));
+            counts.push(prisma.fiveDBet.count({ where: fiveDWhere }));
 
             queries.push(
                 prisma.fiveDBet.findMany({
@@ -236,15 +223,14 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                         },
                         fiveDBetResult: true,
                     },
-                    orderBy: {
-                        createdAt: "desc",
-                    },
+                    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+                    take: windowSize,
                 })
             );
 
             // K3 bets
-            const k3Where: any = {};
-            if (userId) k3Where.userId = userId;
+            const k3Where = lotteryWhere("k3BetResult", nameMatches("K3 Lotre"));
+            counts.push(prisma.k3Bet.count({ where: k3Where }));
 
             queries.push(
                 prisma.k3Bet.findMany({
@@ -260,15 +246,14 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                         },
                         k3BetResult: true,
                     },
-                    orderBy: {
-                        createdAt: "desc",
-                    },
+                    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+                    take: windowSize,
                 })
             );
 
             // Moto bets
-            const motoWhere: any = {};
-            if (userId) motoWhere.userId = userId;
+            const motoWhere = lotteryWhere("motoBetResult", nameMatches("Moto"));
+            counts.push(prisma.motoBet.count({ where: motoWhere }));
 
             queries.push(
                 prisma.motoBet.findMany({
@@ -284,15 +269,14 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                         },
                         motoBetResult: true,
                     },
-                    orderBy: {
-                        createdAt: "desc",
-                    },
+                    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+                    take: windowSize,
                 })
             );
 
             // TrxWingo bets
-            const trxWingoWhere: any = {};
-            if (userId) trxWingoWhere.userId = userId;
+            const trxWingoWhere = lotteryWhere("trxWingoBetResult", nameMatches("TRX Wingo"));
+            counts.push(prisma.trxWingoBet.count({ where: trxWingoWhere }));
 
             queries.push(
                 prisma.trxWingoBet.findMany({
@@ -308,9 +292,8 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                         },
                         trxWingoBetResult: true,
                     },
-                    orderBy: {
-                        createdAt: "desc",
-                    },
+                    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+                    take: windowSize,
                 })
             );
 
@@ -324,6 +307,10 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                 };
             }
 
+            if (wins === "true") inoutWhere.winAmount = { gt: 0 };
+            if (wins === "false") inoutWhere.winAmount = 0;
+            counts.push(prisma.inoutBet.count({ where: inoutWhere }));
+
             queries.push(
                 prisma.inoutBet.findMany({
                     where: inoutWhere,
@@ -332,14 +319,15 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                             select: ADMIN_USER_IDENTITY_SELECT,
                         },
                     },
-                    orderBy: {
-                        createdAt: "desc",
-                    },
+                    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+                    take: windowSize,
                 })
             );
 
             // Execute all queries in parallel
-            const results = await Promise.all(queries);
+            const [results, countRows] = await Promise.all([
+                Promise.all(queries), Promise.all(counts),
+            ]);
 
             // Normalize all bets into a common format
             let allBets: Array<{
@@ -468,32 +456,20 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                     gameName: bet.gameMode,
                     betAmount: bet.betAmount,
                     winAmount: bet.winAmount,
-                    status: bet.isSettled ? "PENDING" : "SETTLED",
+                    status: bet.isSettled ? "SETTLED" : "PENDING",
                     createdAt: bet.createdAt,
                     user: mapAdminUserIdentity(bet.user),
                 }))
             );
 
-            // Apply filters
-            if (gameName) {
-                allBets = allBets.filter((bet) =>
-                    bet.gameName.toLowerCase().includes(gameName.toLowerCase())
-                );
-            }
-
-            if (wins === "true") {
-                allBets = allBets.filter((bet) => bet.winAmount > 0);
-            } else if (wins === "false") {
-                allBets = allBets.filter((bet) => bet.winAmount === 0);
-            }
-
             // Sort by createdAt desc
             allBets.sort(
-                (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
+                (a, b) => b.createdAt.getTime() - a.createdAt.getTime() ||
+                    b.id.localeCompare(a.id)
             );
 
             // Apply pagination
-            const total = allBets.length;
+            const total = countRows.reduce((sum, count) => sum + count, 0);
             const paginatedBets = allBets.slice(skip, skip + limit);
             const totalPages = Math.ceil(total / limit);
 
@@ -514,8 +490,8 @@ export const gameHistoryRoutes = (app: OpenAPIHono) => {
                 totalPages,
             };
 
-            // Cache for 15 minutes
-            await Cache.hset(mainCacheKey, fieldKey, result, 60 * 15);
+            // Live admin history should not retain settled statuses for minutes.
+            await Cache.set(cacheKey, { success: true, ...result }, 5);
 
             return c.json(
                 {

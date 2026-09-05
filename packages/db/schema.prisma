@@ -70,6 +70,7 @@ model User {
     @@index([isBanned])
     @@index([hasIllegalBetPenalty])
     @@index([createdAt])
+    @@index([role, isDemo, balance(sort: Desc), serialNumber])
 }
 
 model UserQuery {
@@ -723,6 +724,7 @@ model Deposit {
     @@index([status])
     @@index([createdAt])
     @@index([userId, status])
+    @@index([userId, status, createdAt])
 }
 
 model Withdraw {
@@ -745,6 +747,7 @@ model Withdraw {
     @@index([status])
     @@index([createdAt])
     @@index([userId, status])
+    @@index([userId, status, createdAt])
 }
 
 model Otp {
@@ -831,6 +834,8 @@ model InoutBet {
 
     createdAt DateTime @default(now())
     updatedAt DateTime @updatedAt
+    @@index([createdAt])
+    @@index([userId, createdAt])
 }
 
 model WingoPeriod {
@@ -882,6 +887,7 @@ model WingoBet {
     @@index([betType])
     @@index([createdAt])
     @@index([userId, periodId])
+    @@index([userId, createdAt])
 }
 
 model WingoBetResult {
@@ -961,6 +967,7 @@ model FiveDBet {
     @@index([position])
     @@index([createdAt])
     @@index([userId, periodId])
+    @@index([userId, createdAt])
 }
 
 model FiveDBetResult {
@@ -1045,6 +1052,7 @@ model K3Bet {
     @@index([betType])
     @@index([createdAt])
     @@index([userId, periodId])
+    @@index([userId, createdAt])
 }
 
 model K3BetResult {
@@ -1117,6 +1125,7 @@ model MotoBet {
     @@index([betType])
     @@index([createdAt])
     @@index([userId, periodId])
+    @@index([userId, createdAt])
 }
 
 model MotoBetResult {
@@ -1191,6 +1200,7 @@ model TrxWingoBet {
     @@index([betType])
     @@index([createdAt])
     @@index([userId, periodId])
+    @@index([userId, createdAt])
 }
 
 model TrxWingoBetResult {

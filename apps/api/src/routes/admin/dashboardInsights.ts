@@ -8,6 +8,7 @@ import {
     ADMIN_USER_IDENTITY_SELECT,
     mapAdminUserIdentity,
 } from "@/lib/adminUserIdentity";
+import { cachedAdminRead } from "@/lib/cachedAdminRead";
 import { HTTP_STATUS } from "@/lib/http";
 import { parseYmdStartIst, shiftYmdIst, ymdIst } from "@/lib/istDate";
 import { REAL_USER_WHERE } from "@/lib/realUserFilter";
@@ -453,6 +454,7 @@ export const dashboardInsightsRoutes = (app: OpenAPIHono) => {
     app.openapi(getRecentWingoBetsRoute, async (c) => {
         try {
             c.header("Cache-Control", "private, no-store");
+            const payload = await cachedAdminRead("admin:recent-wingo:v1", 2, async () => {
             const results = await prisma.wingoBetResult.findMany({
                 where: { bet: { user: REAL_USER_WHERE } },
                 take: 50,
@@ -483,8 +485,7 @@ export const dashboardInsightsRoutes = (app: OpenAPIHono) => {
                 },
             });
 
-            return c.json(
-                {
+            return {
                     success: true,
                     bets: results.map((result) => ({
                         id: result.bet.id,
@@ -502,9 +503,9 @@ export const dashboardInsightsRoutes = (app: OpenAPIHono) => {
                         placedAt: result.bet.createdAt.toISOString(),
                         settledAt: result.processedAt.toISOString(),
                     })),
-                },
-                HTTP_STATUS.OK
-            );
+                };
+            });
+            return c.json(payload, HTTP_STATUS.OK);
         } catch (error) {
             logger.error("Failed to load recent settled WinGo bets", error);
             return apiError(
@@ -520,6 +521,7 @@ export const dashboardInsightsRoutes = (app: OpenAPIHono) => {
             c.header("Cache-Control", "private, no-store");
             const { sort } = c.req.valid("query");
 
+            const payload = await cachedAdminRead(`admin:top-users:v1:${sort}`, 5, async () => {
             if (sort === "withdrawals") {
                 const withdrawalGroups = await prisma.withdraw.groupBy({
                     by: ["userId"],
@@ -557,10 +559,7 @@ export const dashboardInsightsRoutes = (app: OpenAPIHono) => {
                         : [];
                 });
 
-                return c.json(
-                    { success: true, sort, users: rankedUsers },
-                    HTTP_STATUS.OK
-                );
+                return { success: true, sort, users: rankedUsers };
             }
 
             const users = await prisma.user.findMany({
@@ -589,8 +588,7 @@ export const dashboardInsightsRoutes = (app: OpenAPIHono) => {
                 withdrawalGroups.map((group) => [group.userId, group])
             );
 
-            return c.json(
-                {
+            return {
                     success: true,
                     sort,
                     users: users.map((user, index) => {
@@ -606,9 +604,9 @@ export const dashboardInsightsRoutes = (app: OpenAPIHono) => {
                             isBanned: user.isBanned,
                         };
                     }),
-                },
-                HTTP_STATUS.OK
-            );
+                };
+            });
+            return c.json(payload, HTTP_STATUS.OK);
         } catch (error) {
             logger.error("Failed to load top users", error);
             return apiError(

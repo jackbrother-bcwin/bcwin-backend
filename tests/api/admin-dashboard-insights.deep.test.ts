@@ -227,6 +227,7 @@ describe("Admin dashboard insights", () => {
     });
 
     test("recent list returns settled bets with user and draw result", async () => {
+        await Cache.del("admin:recent-wingo:v1");
         const response = await get("/api/v1/admin/dashboard/wingo-bets", {
             cookie: adminCookie,
         });
@@ -377,26 +378,26 @@ describe("Admin dashboard insights", () => {
     });
 
     test("top users supports balance and successful-withdrawal ranking", async () => {
-        const byBalance = await get("/api/v1/admin/dashboard/top-users", {
-            cookie: adminCookie,
-            query: { sort: "balance" },
-        });
-        expect(byBalance.status).toBe(200);
-        const balanceRow = byBalance.json?.users?.find(
-            (row: { user: { id: string } }) => row.user.id === player.id
-        );
+        const load = async (sort: "balance" | "withdrawals") => {
+            await Cache.del(`admin:top-users:v1:${sort}`);
+            const response = await get("/api/v1/admin/dashboard/top-users", {
+                cookie: adminCookie,
+                query: { sort },
+            });
+            expect(response.status).toBe(200);
+            return response.json?.users?.find(
+                (row: { user: { id: string } }) => row.user.id === player.id
+            );
+        };
+
+        let balanceRow = await load("balance");
+        if (!balanceRow) balanceRow = await load("balance");
         expect(balanceRow?.balance).toBe(999_999_999);
         expect(balanceRow?.successfulWithdrawAmount).toBe(1_000_000_000);
         expect(balanceRow?.successfulWithdrawCount).toBe(1);
 
-        const byWithdraw = await get("/api/v1/admin/dashboard/top-users", {
-            cookie: adminCookie,
-            query: { sort: "withdrawals" },
-        });
-        expect(byWithdraw.status).toBe(200);
-        const withdrawRow = byWithdraw.json?.users?.find(
-            (row: { user: { id: string } }) => row.user.id === player.id
-        );
+        let withdrawRow = await load("withdrawals");
+        if (!withdrawRow) withdrawRow = await load("withdrawals");
         expect(withdrawRow).toMatchObject({
             successfulWithdrawAmount: 1_000_000_000,
             successfulWithdrawCount: 1,

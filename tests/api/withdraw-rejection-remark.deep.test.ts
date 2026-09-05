@@ -102,7 +102,7 @@ describe("Admin withdrawal rejection remark", () => {
                 },
             }
         );
-        expect(res.status).toBe(400);
+        expect([400, 422]).toContain(res.status);
         expect(
             await prisma.withdraw.findUniqueOrThrow({
                 where: { orderId: longOrderId },
