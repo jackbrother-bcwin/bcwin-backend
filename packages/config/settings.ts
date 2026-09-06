@@ -1,42 +1,29 @@
 import { prisma, type Config as DBConfig, WingoAlgorithm } from "@bcwin/db";
-import { Cache, CacheKey } from "@bcwin/cache";
+import { SystemConfigCache } from "@bcwin/cache";
 
 // Re-export or use the DB type
 export type SystemConfigData = DBConfig;
 
 export class SystemSettings {
-    private static readonly CACHE_TTL = 60 * 60 * 24 * 10; // 10 days
-
     /**
      * Fetches the system configuration from Cache or DB.
      * @returns The system configuration object or null if not found.
      */
     static async get(): Promise<SystemConfigData | null> {
         try {
-            // Try to get from cache first
-            const cachedConfig = await Cache.get<SystemConfigData>(
-                CacheKey.systemConfig
-            );
-
-            if (cachedConfig) {
-                return cachedConfig;
-            }
-
-            // Cache miss - fetch from DB
-            const config = await prisma.config.findFirst();
-
-            if (config) {
-                // Set cache
-                await Cache.set(CacheKey.systemConfig, config, this.CACHE_TTL);
-
-                return config;
-            }
-
-            return null;
+            return await SystemConfigCache.getOrLoad(() => prisma.config.findFirst());
         } catch (error) {
             console.error("Error fetching config:", error);
             return null;
         }
+    }
+
+    /** Called after a config commit; errors must reach the admin API. */
+    static async refresh(): Promise<SystemConfigData | null> {
+        await SystemConfigCache.invalidate();
+        // Re-read the DB instead of caching an earlier update's returned row:
+        // another admin may already have committed a newer change.
+        return SystemConfigCache.getOrLoad(() => prisma.config.findFirst(), true);
     }
 
     static async getServiceFeePercent(): Promise<number> {

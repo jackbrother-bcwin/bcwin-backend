@@ -264,6 +264,7 @@ export class CacheKey {
     static userSalaryHistory = (userId: string) =>
         `user:${userId}:salary-history`;
     static systemConfig = "system:config";
+    static systemConfigRevision = "system:config:revision";
     static inoutGames = "inout:games";
 
     static websocketPubsubChannel = "websocket:channel";
@@ -273,6 +274,78 @@ export class CacheKey {
         `websocket:client-topics:${clientId}`;
     static websocketClientMetadata = (clientId: string) =>
         `websocket:client-metadata:${clientId}`;
+}
+
+/**
+ * Config needs confirmed writes and protection against stale cache fills.
+ * A revision changes whenever an admin invalidates config. A DB read may only
+ * populate Redis if that revision is still current when the read completes.
+ */
+export class SystemConfigCache {
+    // Bounds staleness if a process dies between a DB commit and invalidation.
+    private static readonly TTL_SECONDS = 60;
+    private static readonly SNAPSHOT = `
+        return {redis.call('GET', KEYS[1]) or '', redis.call('GET', KEYS[2]) or ''}
+    `;
+    private static readonly INVALIDATE = `
+        redis.call('SET', KEYS[2], ARGV[1])
+        redis.call('DEL', KEYS[1])
+        return 1
+    `;
+    private static readonly FILL = `
+        if (redis.call('GET', KEYS[2]) or '') ~= ARGV[1] then
+            return 0
+        end
+        redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])
+        return 1
+    `;
+
+    private static async eval(script: string, ...args: string[]) {
+        return withTimeout((Cache.client ?? redis).eval(
+            script, 2, CacheKey.systemConfig, CacheKey.systemConfigRevision, ...args
+        ), 1000);
+    }
+
+    static async invalidate(): Promise<void> {
+        // Do not use the best-effort Cache.set/del or its local circuit breaker:
+        // API and engine must agree that this invalidation reached Redis.
+        for (let attempt = 0; ; attempt++) {
+            try {
+                // Each attempt has a new revision, also fencing any delayed fill.
+                await this.eval(this.INVALIDATE, crypto.randomUUID());
+                return;
+            } catch (error) {
+                if (attempt === 2) throw error;
+            }
+        }
+    }
+
+    static async getOrLoad<T>(
+        load: () => Promise<T | null>,
+        required = false
+    ): Promise<T | null> {
+        if (process.env.DISABLE_CACHE && !required) return load();
+        try {
+            for (let attempt = 0; attempt < 3; attempt++) {
+                const [cached, revision] = await this.eval(this.SNAPSHOT) as [string, string];
+                if (cached) return JSON.parse(cached) as T;
+
+                const value = await load();
+                if (!value) return null;
+                const filled = await this.eval(
+                    this.FILL, revision, JSON.stringify(value), String(this.TTL_SECONDS)
+                );
+                if (filled === 1) return value;
+                // An admin updated config during the DB read. Read again instead
+                // of returning or caching that older snapshot.
+            }
+            throw new Error("System config changed repeatedly while refreshing cache");
+        } catch (error) {
+            if (required) throw error;
+            logger.warn("System config cache unavailable; reading database", error);
+            return load();
+        }
+    }
 }
 
 /**

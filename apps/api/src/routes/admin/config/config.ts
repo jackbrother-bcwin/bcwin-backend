@@ -5,8 +5,9 @@ import Logger from "@bcwin/logger";
 import { HTTP_STATUS } from "@/lib/http";
 import { apiError, CommonResponses } from "@/lib/utils";
 import { authCookie } from "@/schemas";
-import { Config, prisma, WingoAlgorithm } from "@bcwin/db";
-import { Cache, CacheKey } from "@bcwin/cache";
+import { prisma, WingoAlgorithm } from "@bcwin/db";
+import { SystemConfigCache } from "@bcwin/cache";
+import { SystemSettings } from "@bcwin/config";
 import { invalidateMaintenanceCache } from "@/middleware/maintenance";
 
 const logger = new Logger("admin-config");
@@ -187,7 +188,7 @@ const UpdateConfigBodySchema = z.object({
     }),
     wingoAlgorithm: z.enum(WingoAlgorithm).optional().openapi({
         description:
-            "Wingo algorithm. Random means the wingo result is random, Winning means the result will try to maximize inhouse profit by choosing the number with least bets on it, TRX means the result is generated from Tron block hashes (same as trxWingo).",
+            "Wingo algorithm. Random means the wingo result is random, Winning means the result will try to maximize inhouse profit by choosing the number with least bets on it, TRX means the result is generated from Tron block hashes (same as trxWingo). Changes apply to running periods whose result calculation has not started (normally in the final 3 seconds). Manually set results take precedence.",
         example: WingoAlgorithm.RANDOM,
     }),
     maintananceMode: z.boolean().optional().openapi({
@@ -299,7 +300,7 @@ export const systemConfigRoutes = (app: OpenAPIHono) => {
     app.openapi(getConfigRoute, async (c) => {
         try {
             // Check cache
-            const cachedConfig = await Cache.get<Config>(CacheKey.systemConfig);
+            const cachedConfig = await SystemSettings.get();
 
             if (cachedConfig) {
                 return c.json(
@@ -374,8 +375,7 @@ export const systemConfigRoutes = (app: OpenAPIHono) => {
                 updatedAt: config.updatedAt.toISOString(),
             };
 
-            // Cache for 10 days
-            await Cache.set(CacheKey.systemConfig, result, 60 * 60 * 24 * 10);
+            await SystemSettings.refresh();
 
             return c.json(
                 {
@@ -397,6 +397,9 @@ export const systemConfigRoutes = (app: OpenAPIHono) => {
     app.openapi(updateConfigRoute, async (c) => {
         try {
             const updates = c.req.valid("json");
+
+            // Require Redis before changing the DB and evict the previous value.
+            await SystemConfigCache.invalidate();
 
             // Get or create config
             let config = await prisma.config.findFirst();
@@ -517,9 +520,6 @@ export const systemConfigRoutes = (app: OpenAPIHono) => {
                 updatedAt: config.updatedAt.toISOString(),
             };
 
-            // Update cache with new config (10 days TTL)
-            await Cache.set(CacheKey.systemConfig, result, 60 * 60 * 24 * 10);
-
             // Penalized users store a copy of the factor. Raising Config 3x → 5x
             // must move those rows or need-to-bet stays at 3x.
             if (updates.illegalBetPenaltyFactor !== undefined) {
@@ -536,6 +536,10 @@ export const systemConfigRoutes = (app: OpenAPIHono) => {
                 await invalidateMaintenanceCache();
                 logger.info(`Maintenance cache invalidated (mode=${result.maintananceMode})`);
             }
+
+            // Fence readers that started before/during the commit, then confirm
+            // Redis contains current DB config before reporting success.
+            await SystemSettings.refresh();
 
             logger.info("System config updated", updates);
 
