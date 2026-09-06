@@ -22,6 +22,8 @@ describe("Admin dashboard insights", () => {
     let player: Awaited<ReturnType<typeof createTestUser>>;
     let live30: Awaited<ReturnType<typeof createWingoPeriod>>;
     let live60: Awaited<ReturnType<typeof createWingoPeriod>>;
+    let live180: Awaited<ReturnType<typeof createWingoPeriod>>;
+    let live300: Awaited<ReturnType<typeof createWingoPeriod>>;
     let settledBetId: string;
     const managerPeriods: Record<string, string> = {};
 
@@ -43,6 +45,18 @@ describe("Admin dashboard insights", () => {
             startTime: now,
             endTime: new Date(now.getTime() + 120_000),
             suffix: "live60",
+        });
+        live180 = await createWingoPeriod(tracker, {
+            durationSeconds: 180,
+            startTime: now,
+            endTime: new Date(now.getTime() + 180_000),
+            suffix: "live180",
+        });
+        live300 = await createWingoPeriod(tracker, {
+            durationSeconds: 300,
+            startTime: now,
+            endTime: new Date(now.getTime() + 300_000),
+            suffix: "live300",
         });
 
         await prisma.wingoBet.createMany({
@@ -70,6 +84,22 @@ describe("Admin dashboard insights", () => {
                     contractAmount: 196,
                     betType: "COLOR",
                     betChoice: "GREEN",
+                },
+                {
+                    userId: player.id,
+                    periodId: live180.id,
+                    betAmount: 80,
+                    contractAmount: 78.4,
+                    betType: "SIZE",
+                    betChoice: "BIG",
+                },
+                {
+                    userId: player.id,
+                    periodId: live300.id,
+                    betAmount: 40,
+                    contractAmount: 39.2,
+                    betType: "NUMBER",
+                    betChoice: "0",
                 },
                 {
                     userId: admin.id,
@@ -201,7 +231,7 @@ describe("Admin dashboard insights", () => {
         });
     });
 
-    test("live cards return current 30s and 1m bet totals and selections", async () => {
+    test("live cards return current 30s / 1m / 3m / 5m bet totals and selections", async () => {
         const response = await get("/api/v1/admin/dashboard/wingo-live", {
             cookie: adminCookie,
         });
@@ -214,6 +244,12 @@ describe("Admin dashboard insights", () => {
         const period60 = response.json?.periods?.find(
             (period: { id: string }) => period.id === live60.id
         );
+        const period180 = response.json?.periods?.find(
+            (period: { id: string }) => period.id === live180.id
+        );
+        const period300 = response.json?.periods?.find(
+            (period: { id: string }) => period.id === live300.id
+        );
         expect(period30?.betCount).toBe(2);
         expect(period30?.totalBetAmount).toBe(150);
         expect(period30?.selections?.[0]).toMatchObject({
@@ -224,6 +260,10 @@ describe("Admin dashboard insights", () => {
         });
         expect(period60?.betCount).toBe(1);
         expect(period60?.totalBetAmount).toBe(200);
+        expect(period180?.betCount).toBe(1);
+        expect(period180?.totalBetAmount).toBe(80);
+        expect(period300?.betCount).toBe(1);
+        expect(period300?.totalBetAmount).toBe(40);
     });
 
     test("recent list returns settled bets with user and draw result", async () => {

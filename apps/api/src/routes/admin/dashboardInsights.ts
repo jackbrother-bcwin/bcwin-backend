@@ -30,7 +30,7 @@ const getLiveWingoRoute = createRoute({
     method: "get",
     path: "/dashboard/wingo-live",
     tags: ["admin"],
-    summary: "Current WinGo 30-second and 1-minute betting snapshots",
+    summary: "Current WinGo 30s / 1min / 3min / 5min betting snapshots",
     request: { cookies: authCookie },
     responses: {
         200: {
@@ -377,7 +377,7 @@ export const dashboardInsightsRoutes = (app: OpenAPIHono) => {
             const now = new Date();
             const periods = await prisma.wingoPeriod.findMany({
                 where: {
-                    durationSeconds: { in: [30, 60] },
+                    durationSeconds: { in: [30, 60, 180, 300] },
                     status: "ACTIVE",
                     startTime: { lte: now },
                     endTime: { gt: now },
