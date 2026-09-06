@@ -619,17 +619,51 @@ export class DailyTeamRebate {
      * Close IST day `ymd`: price that day's downline bets at that day's
      * qualified level (starts 0 at 00:00, steps up as conditions clear).
      * Skips (userId, betId) pairs that already have a row. Then credit
-     * wallets and set rebateLevel = 0.
+     * wallets. Midnight cron also sets rebateLevel = 0; late catch-up
+     * must not, or today's live qualify is wiped.
      */
-    static async processClosedIstDay(ymd: string): Promise<{
+    static async processClosedIstDay(
+        ymd: string,
+        opts?: { resetRebateLevel?: boolean }
+    ): Promise<{
         created: number;
         settled: boolean;
     }> {
         const range = istDayRange(ymd);
         const created = await this.accrueClosedDay(range);
-        await RebateCalculator.settleAllUnsettledRebates();
-        await prisma.userVipLevel.updateMany({ data: { rebateLevel: 0 } });
+        await RebateCalculator.settleAllUnsettledRebates({ createdAt: range });
+        if (opts?.resetRebateLevel !== false) {
+            await prisma.userVipLevel.updateMany({ data: { rebateLevel: 0 } });
+        }
         return { created, settled: true };
+    }
+
+    /** True when that IST day still has unpaid Agent commission. */
+    static async needsClose(ymd: string): Promise<boolean> {
+        const range = istDayRange(ymd);
+        const unpaid = await prisma.rebate.findFirst({
+            where: { createdAt: range, settled: false },
+            select: { id: true },
+        });
+        if (unpaid) return true;
+        const paid = await prisma.rebate.findFirst({
+            where: { createdAt: range, settled: true },
+            select: { id: true },
+        });
+        if (paid) return false;
+        const createdAt = { gte: range.gte, lt: range.lt };
+        const hits = await Promise.all([
+            prisma.wingoBet.findFirst({ where: { createdAt }, select: { id: true } }),
+            prisma.fiveDBet.findFirst({ where: { createdAt }, select: { id: true } }),
+            prisma.k3Bet.findFirst({ where: { createdAt }, select: { id: true } }),
+            prisma.motoBet.findFirst({ where: { createdAt }, select: { id: true } }),
+            prisma.trxWingoBet.findFirst({ where: { createdAt }, select: { id: true } }),
+            prisma.inoutBet.findFirst({
+                where: { createdAt, isRolledback: false },
+                select: { id: true },
+            }),
+        ]);
+        return hits.some(Boolean);
     }
 
     private static async accrueClosedDay(range: DayRange): Promise<number> {
@@ -643,18 +677,31 @@ export class DailyTeamRebate {
             for (const id of chain) uplineIds.add(id);
         }
 
+        logger.info(
+            `Closing day: ${bets.length} bets, ${uplineIds.size} uplines`
+        );
         const levelByUpline = new Map<string, number>();
         const memberCache = new Map<string, TeamMember[]>();
+        let qualified = 0;
         for (const uid of uplineIds) {
             const members = await this.teamMembers(uid);
             memberCache.set(uid, members);
             const metrics = await this.metricsForDay(uid, range, members);
             levelByUpline.set(uid, await this.qualifyLevel(metrics));
+            qualified++;
+            if (qualified % 200 === 0) {
+                logger.info(`Qualified ${qualified}/${uplineIds.size} uplines`);
+            }
         }
 
         let created = 0;
         const rateCache = new Map<string, number>();
+        let seen = 0;
         for (const bet of bets) {
+            seen++;
+            if (seen % 2000 === 0) {
+                logger.info(`Priced ${seen}/${bets.length} bets, created ${created}`);
+            }
             const chain = await this.uplineIds(bet.bettorId, chainCache);
             const category = mapGameToRebateCategory(
                 bet.game,

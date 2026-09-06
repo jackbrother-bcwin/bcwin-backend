@@ -112,15 +112,21 @@ export class RebateCalculator {
     }
 
     /**
-     * Settle all unsettled rebates — credit receivers' balances.
-     * Independent of commission (which credits immediately).
+     * Settle unsettled rebates — credit receivers' balances.
+     * Pass `createdAt` to limit to one IST day so a recovery cannot
+     * touch other days' rows.
      */
-    static async settleAllUnsettledRebates(): Promise<void> {
+    static async settleAllUnsettledRebates(opts?: {
+        createdAt?: { gte: Date; lt: Date };
+    }): Promise<void> {
         try {
-            logger.info("Starting to settle all unsettled rebates...");
+            logger.info("Starting to settle unsettled rebates...");
 
             const unsettledRebates = await prisma.rebate.findMany({
-                where: { settled: false },
+                where: {
+                    settled: false,
+                    ...(opts?.createdAt ? { createdAt: opts.createdAt } : {}),
+                },
                 orderBy: { userId: "asc" },
             });
 
