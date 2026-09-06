@@ -7,6 +7,59 @@ export type WagerCategory = "RECHARGE" | "REWARD";
 /** Inclusive. Float leftovers never hit exact 0 (ADR-0027). */
 export const LOW_BALANCE_WAGER_CLEAR = 5;
 
+const DEFAULT_PENALTY_FACTOR = 1;
+
+export function liveRechargeMultiplier(user: {
+    hasIllegalBetPenalty: boolean;
+    illegalBetPenaltyFactor: number | null;
+    configWager: number;
+    configPenalty?: number | null;
+}): number {
+    if (user.hasIllegalBetPenalty) {
+        const userF = user.illegalBetPenaltyFactor;
+        if (userF != null && userF > 0) return userF;
+        const cfgF = user.configPenalty;
+        return cfgF != null && cfgF > 0 ? cfgF : DEFAULT_PENALTY_FACTOR;
+    }
+    return user.configWager > 0 ? user.configWager : 1;
+}
+
+/**
+ * Recharge wager follows the live admin factor (penalty or Config.wager).
+ * Snapshot at deposit is only a starting value — raising 1x → 3x must reopen
+ * remaining need, or 3x users withdraw after betting principal once.
+ */
+export async function syncRechargeWagerToLiveFactor(
+    userId: string,
+    liveMult: number
+) {
+    if (!(liveMult > 0)) return;
+
+    const reqs = await prisma.wagerRequirement.findMany({
+        where: { userId, sourceType: "RECHARGE" },
+    });
+
+    for (const req of reqs) {
+        const newRequired = Math.ceil(req.amount * liveMult);
+        const factorUp = newRequired > req.requiredWager;
+        if (
+            newRequired === req.requiredWager &&
+            req.multiplier === liveMult &&
+            !factorUp
+        ) {
+            continue;
+        }
+        await prisma.wagerRequirement.update({
+            where: { id: req.id },
+            data: {
+                multiplier: liveMult,
+                requiredWager: newRequired,
+                isCleared: factorUp ? false : req.isCleared,
+            },
+        });
+    }
+}
+
 /**
  * Creates a wager requirement record for a deposit or reward claim.
  */
@@ -26,10 +79,13 @@ export async function createWagerRequirement(
             where: { id: userId },
             select: { hasIllegalBetPenalty: true, illegalBetPenaltyFactor: true },
         });
-        const baseWager = await SystemSettings.getWagerFactor();
-        multiplier = user?.hasIllegalBetPenalty
-            ? (user.illegalBetPenaltyFactor ?? 3.0)
-            : baseWager;
+        const config = await SystemSettings.get();
+        multiplier = liveRechargeMultiplier({
+            hasIllegalBetPenalty: user?.hasIllegalBetPenalty ?? false,
+            illegalBetPenaltyFactor: user?.illegalBetPenaltyFactor ?? null,
+            configWager: config?.wager ?? 1,
+            configPenalty: config?.illegalBetPenaltyFactor ?? DEFAULT_PENALTY_FACTOR,
+        });
     } else if (sourceType === "REWARD") {
         const sysConfig = await SystemSettings.get();
         multiplier = (sysConfig as any)?.rewardWagerFactor ?? 1.0;
@@ -68,7 +124,11 @@ export interface UserWagerStatus {
 export async function getUserWagerStatus(userId: string): Promise<UserWagerStatus> {
     const user = await prisma.user.findUnique({
         where: { id: userId },
-        select: { balance: true },
+        select: {
+            balance: true,
+            hasIllegalBetPenalty: true,
+            illegalBetPenaltyFactor: true,
+        },
     });
 
     if (user && user.balance <= LOW_BALANCE_WAGER_CLEAR) {
@@ -80,6 +140,19 @@ export async function getUserWagerStatus(userId: string): Promise<UserWagerStatu
             isWithdrawalFrozen: false,
             activeRequirementsCount: 0,
         };
+    }
+
+    if (user) {
+        const config = await SystemSettings.get();
+        await syncRechargeWagerToLiveFactor(
+            userId,
+            liveRechargeMultiplier({
+                hasIllegalBetPenalty: user.hasIllegalBetPenalty,
+                illegalBetPenaltyFactor: user.illegalBetPenaltyFactor,
+                configWager: config?.wager ?? 1,
+                configPenalty: config?.illegalBetPenaltyFactor ?? DEFAULT_PENALTY_FACTOR,
+            })
+        );
     }
 
     const activeReqs = await prisma.wagerRequirement.findMany({

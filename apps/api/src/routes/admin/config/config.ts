@@ -520,6 +520,17 @@ export const systemConfigRoutes = (app: OpenAPIHono) => {
             // Update cache with new config (10 days TTL)
             await Cache.set(CacheKey.systemConfig, result, 60 * 60 * 24 * 10);
 
+            // Penalized users store a copy of the factor. Raising Config 3x → 5x
+            // must move those rows or need-to-bet stays at 3x.
+            if (updates.illegalBetPenaltyFactor !== undefined) {
+                await prisma.user.updateMany({
+                    where: { hasIllegalBetPenalty: true },
+                    data: {
+                        illegalBetPenaltyFactor: updates.illegalBetPenaltyFactor,
+                    },
+                });
+            }
+
             // Immediately bust maintenance cache if the toggle changed
             if (updates.maintananceMode !== undefined || updates.maintananceMessage !== undefined) {
                 await invalidateMaintenanceCache();

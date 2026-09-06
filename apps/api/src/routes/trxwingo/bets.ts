@@ -29,6 +29,7 @@ import {
 import { logIpActivity, IpActivityType } from "@/lib/ipActivity";
 import { syncVipLevelFromXpAsync } from "@/lib/vipLevelSync";
 import { requireLifetimeDeposit } from "@/lib/gameDepositGate";
+import { rejectIfTrxWingoBetsPaused } from "@/lib/trxWingoPauseGate";
 
 const logger = new Logger("trx-wingo-bets");
 
@@ -89,6 +90,7 @@ const placeBetRoute = createRoute({
         },
         ...CommonResponses.badRequest(),
         ...CommonResponses.unauthorized(),
+        ...CommonResponses.serviceUnavailable(),
         ...CommonResponses.internalServerError(),
     },
 });
@@ -133,6 +135,9 @@ function validateBetChoice(betType: string, betChoice: string): boolean {
 export const betRoutes = (app: OpenAPIHono) => {
     app.openapi(placeBetRoute, async (c) => {
         try {
+            const paused = rejectIfTrxWingoBetsPaused(c);
+            if (paused) return paused;
+
             const user = c.get("user");
             const { periodId, betType, betChoice, betAmount } =
                 c.req.valid("json");

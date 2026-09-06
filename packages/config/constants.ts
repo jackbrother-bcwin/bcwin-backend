@@ -23,3 +23,12 @@ export const AUTO_SALARY_LIVE = false;
 
 export const AUTO_SALARY_PAUSED_MESSAGE =
     "Auto salary is paused until a later release.";
+
+/**
+ * TRX Win Go new bets. Engine / clock / history stay.
+ * Flip true on API and FE together to restore betting.
+ */
+export const TRX_WINGO_BETS_LIVE = false;
+
+export const TRX_WINGO_PAUSE_MESSAGE =
+    "Please wait patiently. TRX Win Go is under maintenance for improvements. Sorry for the inconvenience.";

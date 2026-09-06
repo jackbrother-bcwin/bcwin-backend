@@ -7,6 +7,8 @@ import { apiError, CommonResponses } from "@/lib/utils";
 import { authCookie } from "@/schemas";
 import { prisma } from "@bcwin/db";
 import { Cache, CacheKey } from "@bcwin/cache";
+import { SystemSettings } from "@bcwin/config";
+import { syncRechargeWagerToLiveFactor } from "@/lib/wagerEngine";
 
 const logger = new Logger("admin-users-penalty");
 
@@ -108,6 +110,11 @@ export const penaltyRoutes = (app: OpenAPIHono) => {
             logger.info(
                 `User ${id} penalty updated. Active: ${hasIllegalBetPenalty}, Factor: ${penaltyFactor}`
             );
+
+            const liveMult = hasIllegalBetPenalty
+                ? (penaltyFactor ?? 3)
+                : await SystemSettings.getWagerFactor();
+            await syncRechargeWagerToLiveFactor(id, liveMult);
 
             // Invalidate caches
             await Promise.all([

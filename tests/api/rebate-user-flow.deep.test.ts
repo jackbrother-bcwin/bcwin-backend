@@ -38,6 +38,11 @@ import {
     type CreatedUser,
 } from "../helpers";
 import { seedRebateRates } from "../../packages/db/seeds/rebateRates";
+import {
+    TRX_WINGO_BETS_LIVE,
+    TRX_WINGO_PAUSE_MESSAGE,
+} from "@bcwin/config";
+import { SelfRebateCalculator } from "@bcwin/rebate";
 import { RebateScheduler } from "../../apps/engine/src/scheduler/rebateScheduler";
 import { SelfRebateScheduler } from "../../apps/engine/src/scheduler/selfRebateScheduler";
 import { CommissionScheduler } from "../../apps/engine/src/scheduler/commissionScheduler";
@@ -252,6 +257,32 @@ describe("Deep E2E: rebate user flow (place bet → endpoints → schedulers)", 
                     betAmount: BET_AMOUNTS.trx,
                 },
             });
+            if (!TRX_WINGO_BETS_LIVE) {
+                expect(res.status).toBe(503);
+                expect(String(res.json?.error ?? "")).toBe(
+                    TRX_WINGO_PAUSE_MESSAGE
+                );
+                await prisma.user.update({
+                    where: { id: bettor.id },
+                    data: { balance: { decrement: BET_AMOUNTS.trx } },
+                });
+                await prisma.trxWingoBet.create({
+                    data: {
+                        userId: bettor.id,
+                        periodId: period.id,
+                        betAmount: BET_AMOUNTS.trx,
+                        contractAmount: Math.round(BET_AMOUNTS.trx * 98) / 100,
+                        betType: "COLOR",
+                        betChoice: "RED",
+                    },
+                });
+                await SelfRebateCalculator.accrueForBet({
+                    userId: bettor.id,
+                    betAmount: BET_AMOUNTS.trx,
+                    game: "TRXWINGO",
+                });
+                return;
+            }
             expect(res.status).toBe(201);
             expect(res.json?.success).toBe(true);
         });

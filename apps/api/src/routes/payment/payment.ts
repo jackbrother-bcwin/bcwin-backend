@@ -394,6 +394,7 @@ export const paymentRoutes = (app: OpenAPIHono) => {
                 maxWithdrawApplicationsPerDay - totalWithdrawApplicationsToday
             );
 
+            c.header("Cache-Control", "no-store, no-cache, must-revalidate");
             return c.json(
                 {
                     success: true,
