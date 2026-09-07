@@ -31,7 +31,7 @@ describe("Cross-market illegal bet placement", () => {
         await place("wingo", f.cookie, period.id, { betType: "NUMBER", betChoice: "2" });
         await place("wingo", f.cookie, period.id, { betType: "COLOR", betChoice: "RED" });
         expect(await factor(f.user.id)).toBeNull();
-        await place("wingo", f.cookie, period.id, { betType: "NUMBER", betChoice: "3" });
+        await place("wingo", f.cookie, period.id, { betType: "NUMBER", betChoice: "3", betAmount: 40 });
         expect(await factor(f.user.id)).toBe(base);
         const bets = await prisma.wingoBet.findMany({ where: { userId: f.user.id } });
         await detectSettledIllegalBets("WINGO", bets);
@@ -44,7 +44,7 @@ describe("Cross-market illegal bet placement", () => {
         await place("5d", f.cookie, period.id, { betCategory: "POSITION", position: "A", betType: "EXACT_NUMBER", betChoice: "2" });
         await place("5d", f.cookie, period.id, { betCategory: "POSITION", position: "B", betType: "HIGH", betChoice: "HIGH" });
         expect(await factor(f.user.id)).toBeNull();
-        await place("5d", f.cookie, period.id, { betCategory: "POSITION", position: "A", betType: "HIGH", betChoice: "HIGH" });
+        await place("5d", f.cookie, period.id, { betCategory: "POSITION", position: "A", betType: "HIGH", betChoice: "HIGH", betAmount: 40 });
         expect(await factor(f.user.id)).toBe(base);
         await detectSettledIllegalBets("5D", await prisma.fiveDBet.findMany({ where: { userId: f.user.id } }));
         expect(await factor(f.user.id)).toBe(base);
@@ -55,7 +55,7 @@ describe("Cross-market illegal bet placement", () => {
         await place("moto", f.cookie, period.id, { targetPosition: "FIRST", betType: "POSITION", betChoice: "5" });
         await place("moto", f.cookie, period.id, { targetPosition: "SECOND", betType: "BIG_SMALL", betChoice: "big" });
         expect(await factor(f.user.id)).toBeNull();
-        await place("moto", f.cookie, period.id, { targetPosition: "FIRST", betType: "BIG_SMALL", betChoice: "big" });
+        await place("moto", f.cookie, period.id, { targetPosition: "FIRST", betType: "BIG_SMALL", betChoice: "big", betAmount: 40 });
         expect(await factor(f.user.id)).toBe(base);
     });
     test("K3 SUM is compared with opposing sum parity", async () => {
@@ -64,7 +64,7 @@ describe("Cross-market illegal bet placement", () => {
         await place("k3", f.cookie, period.id, { betType: "SUM", betChoice: "10" });
         await place("k3", f.cookie, period.id, { betType: "EVEN", betChoice: "EVEN" });
         expect(await factor(f.user.id)).toBeNull();
-        await place("k3", f.cookie, period.id, { betType: "ODD", betChoice: "ODD" });
+        await place("k3", f.cookie, period.id, { betType: "ODD", betChoice: "ODD", betAmount: 40 });
         expect(await factor(f.user.id)).toBe(base);
     });
     test("covering all ten Wingo numbers produces one penalty and survives retries", async () => {

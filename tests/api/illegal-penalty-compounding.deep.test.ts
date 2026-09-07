@@ -60,7 +60,7 @@ describe("Compounding illegal-bet penalty", () => {
         const f = await fixture();
         const period = await createActiveWingoPeriod(tracker, 300);
         expect((await place(f.cookie, period.id, "RED", 10)).status).toBe(201);
-        expect((await place(f.cookie, period.id, "GREEN", 20)).status).toBe(201);
+        expect((await place(f.cookie, period.id, "RED", 20)).status).toBe(201);
         expect((await place(f.cookie, period.id, "GREEN", 100_000)).status).toBe(400);
         expect(await factor(f.user.id)).toBeNull();
     });

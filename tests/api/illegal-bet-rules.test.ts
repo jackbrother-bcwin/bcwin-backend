@@ -7,6 +7,11 @@ function bet(betType: string, betChoice: string, extra: Partial<IllegalBetInput>
 function pair(game: IllegalBetGame, a: IllegalBetInput, b: IllegalBetInput, expected: boolean) {
     expect(isIllegalBetPair(game, a, b)).toBe(expected);
     expect(isIllegalBetPair(game, b, a)).toBe(expected);
+    if (a.betAmount > 0 && b.betAmount > 0 && Number.isFinite(a.betAmount) && Number.isFinite(b.betAmount)) {
+        const differentStake = { ...b, betAmount: a.betAmount + 40 };
+        expect(isIllegalBetPair(game, a, differentStake)).toBe(expected);
+        expect(isIllegalBetPair(game, differentStake, a)).toBe(expected);
+    }
 }
 
 describe("Illegal bet selection rules", () => {
@@ -26,16 +31,24 @@ describe("Illegal bet selection rules", () => {
             pair(game, bet("NUMBER", "2"), bet("NUMBER", "3"), false);
         });
     }
-    test("same user, round, stake and distinct bet are required", () => {
+    test("same user, round and distinct valid bets are required", () => {
         const number = bet("NUMBER", "3");
         const red = bet("COLOR", "RED");
-        for (const extra of [{ userId: "other" }, { periodId: "other" }, { betAmount: 50 }, { id: number.id }]) {
+        for (const extra of [{ userId: "other" }, { periodId: "other" }, { id: number.id }]) {
             pair("WINGO", number, { ...red, ...extra }, false);
         }
         pair("WINGO", { ...number, betAmount: 0 }, { ...red, betAmount: 0 }, false);
         pair("WINGO", bet("NUMBER", "invalid"), red, false);
         pair("WINGO", bet("NUMBER", "13"), red, false);
         pair("WINGO", bet("NUMBER", "03"), red, true);
+        for (const amount of [0, -1, NaN, Infinity]) {
+            pair("WINGO", number, { ...red, betAmount: amount }, false);
+        }
+    });
+    test("100 on BIG and 40 on number 3 is illegal; number 7 stays allowed", () => {
+        const big = bet("SIZE", "BIG", { betAmount: 100 });
+        pair("WINGO", big, bet("NUMBER", "3", { betAmount: 40 }), true);
+        pair("WINGO", big, bet("NUMBER", "7", { betAmount: 40 }), false);
     });
     test("K3 exact sum uses 3-10 SMALL, 11-18 BIG and sum parity", () => {
         for (let n = 3; n <= 18; n++) {

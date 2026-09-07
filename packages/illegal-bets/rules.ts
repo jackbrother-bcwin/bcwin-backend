@@ -97,10 +97,11 @@ function coversNumber(group: string, number: number, highFrom: number): boolean 
     }
 }
 
-/** Equal-stake opposing selections, not a calculation of guaranteed profit. */
+/** Opposing selections regardless of stake size, not a calculation of guaranteed profit. */
 export function isIllegalBetPair(game: IllegalBetGame, a: IllegalBetInput, b: IllegalBetInput): boolean {
     if (a.id === b.id || a.userId !== b.userId || a.periodId !== b.periodId ||
-        !Number.isFinite(a.betAmount) || a.betAmount <= 0 || a.betAmount !== b.betAmount) return false;
+        !Number.isFinite(a.betAmount) || a.betAmount <= 0 ||
+        !Number.isFinite(b.betAmount) || b.betAmount <= 0) return false;
     const left = selection(game, a);
     const right = selection(game, b);
     if (!left || !right || left.scope !== right.scope) return false;
