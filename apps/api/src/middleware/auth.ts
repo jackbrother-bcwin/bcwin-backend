@@ -1,11 +1,11 @@
 import { Context, Next } from "hono";
-import { getCookie } from "hono/cookie";
+import { deleteCookie, getCookie } from "hono/cookie";
 
 import Logger from "@bcwin/logger";
 import { prisma } from "@bcwin/db";
 import { HTTP_STATUS } from "../lib/http";
 import { middlewareApiError } from "../lib/utils";
-import { AUTH_COOKIE_NAME, decodeJwt } from "../lib/auth";
+import { AUTH_COOKIE_NAME, authCookieOptions, decodeJwt } from "../lib/auth";
 import { authCatchResponse } from "../lib/dbError";
 
 const logger = new Logger("auth-middleware");
@@ -55,6 +55,18 @@ export const authMiddleware = async (c: Context, next: Next) => {
                 c,
                 "Invalid or expired token",
                 HTTP_STATUS.UNAUTHORIZED
+            );
+        }
+
+        if (user.isBanned) {
+            deleteCookie(c, AUTH_COOKIE_NAME, authCookieOptions());
+            return c.json(
+                {
+                    success: false,
+                    error: "Your account is banned",
+                    code: "ACCOUNT_BANNED",
+                },
+                HTTP_STATUS.FORBIDDEN
             );
         }
 
