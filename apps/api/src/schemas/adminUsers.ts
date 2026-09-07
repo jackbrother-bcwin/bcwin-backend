@@ -57,6 +57,7 @@ export const UserItemSchema = z.object({
         description: "Has illegal bet withdrawal penalty",
         example: false,
     }),
+    zeroWagerEnabled: z.boolean().optional(),
     illegalBetPenaltyFactor: z.number().nullable().openapi({
         description: "Withdrawal penalty factor",
         example: 3.0,

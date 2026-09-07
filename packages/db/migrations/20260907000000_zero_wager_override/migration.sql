@@ -1,0 +1,3 @@
+ALTER TABLE "User"
+ADD COLUMN "zeroWagerEnabled" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN "zeroWagerConsumedAt" TIMESTAMP(3);

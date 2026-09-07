@@ -132,7 +132,8 @@ export const zodErrorHook: Hook<any, any, any, any> = (result, c) => {
 
 export const getTotalUserBets = async (
     userId: string,
-    options?: { since?: Date; excludeInout?: boolean }
+    options?: { since?: Date; excludeInout?: boolean },
+    db: Pick<typeof prisma, "wingoBet" | "fiveDBet" | "k3Bet" | "motoBet" | "trxWingoBet" | "inoutBet"> = prisma
 ) => {
     const whereClause: any = { userId };
     if (options?.since) {
@@ -140,23 +141,23 @@ export const getTotalUserBets = async (
     }
 
     const promises: Promise<any>[] = [
-        prisma.wingoBet.aggregate({
+        db.wingoBet.aggregate({
             where: whereClause,
             _sum: { betAmount: true },
         }),
-        prisma.fiveDBet.aggregate({
+        db.fiveDBet.aggregate({
             where: whereClause,
             _sum: { betAmount: true },
         }),
-        prisma.k3Bet.aggregate({
+        db.k3Bet.aggregate({
             where: whereClause,
             _sum: { betAmount: true },
         }),
-        prisma.motoBet.aggregate({
+        db.motoBet.aggregate({
             where: whereClause,
             _sum: { betAmount: true },
         }),
-        prisma.trxWingoBet.aggregate({
+        db.trxWingoBet.aggregate({
             where: whereClause,
             _sum: { betAmount: true },
         }),
@@ -164,7 +165,7 @@ export const getTotalUserBets = async (
 
     if (!options?.excludeInout) {
         promises.push(
-            prisma.inoutBet.aggregate({
+            db.inoutBet.aggregate({
                 where: { ...whereClause, isRolledback: false },
                 _sum: { betAmount: true },
             })

@@ -52,6 +52,11 @@ export const statsRoutes = (app: OpenAPIHono) => {
             }>(cacheKey);
 
             if (cachedData) {
+                const current = await prisma.user.findUnique({
+                    where: { id }, select: { zeroWagerEnabled: true },
+                });
+                if (!current) return apiError(c, "User not found", HTTP_STATUS.BAD_REQUEST);
+                cachedData.user.zeroWagerEnabled = current.zeroWagerEnabled;
                 return c.json(
                     {
                         success: true,
@@ -130,6 +135,7 @@ export const statsRoutes = (app: OpenAPIHono) => {
                     isBanned: user.isBanned,
                     hasIllegalBetPenalty: user.hasIllegalBetPenalty,
                     illegalBetPenaltyFactor: user.illegalBetPenaltyFactor,
+                    zeroWagerEnabled: user.zeroWagerEnabled,
                     isDemo: user.isDemo,
                     role: user.role,
                     referralCode: user.referralCode,

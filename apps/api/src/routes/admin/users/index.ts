@@ -6,6 +6,7 @@ import { banRoutes } from "./ban";
 import { unbanRoutes } from "./unban";
 import { balanceRoutes } from "./balance";
 import { penaltyRoutes } from "./penalty";
+import { zeroWagerRoutes } from "./zeroWager";
 import { createUserRoutes } from "./create";
 import { inviteTreeRoutes } from "./inviteTree";
 import { yesterdayStatsRoutes } from "./yesterdayStats";
@@ -22,4 +23,5 @@ export const userManagementRoutes = (app: OpenAPIHono) => {
     unbanRoutes(app);
     balanceRoutes(app);
     penaltyRoutes(app);
+    zeroWagerRoutes(app);
 };

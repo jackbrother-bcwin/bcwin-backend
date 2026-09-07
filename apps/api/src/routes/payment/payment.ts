@@ -22,6 +22,7 @@ import {
     creditRechargeBonus,
 } from "@bcwin/activity-bonus";
 import { createWagerRequirement, getUserWagerStatus } from "@/lib/wagerEngine";
+import { debitWithdrawal, WithdrawalValidationError } from "@/lib/withdrawalWager";
 import {
     isValidBankAccount,
     isValidBep20Address,
@@ -46,6 +47,7 @@ async function invalidateUserWithdrawCache(userId: string) {
     try {
         await Cache.del(CacheKey.userWithdrawals(userId));
         await Cache.del(CacheKey.adminWithdrawals);
+        await Cache.del(CacheKey.adminUserStats(userId));
     } catch (e) {
         logger.warn("Failed to invalidate user withdraw cache", e);
     }
@@ -908,11 +910,10 @@ export const paymentRoutes = (app: OpenAPIHono) => {
 
                 const { updatedUser, withdrawal } = await prisma.$transaction(
                     async (tx) => {
-                        const updatedUser = await tx.user.update({
-                            where: { id: user.id },
-                            data: { balance: { decrement: withdrawAmount } },
-                            select: { balance: true },
-                        });
+                        const updatedUser = await debitWithdrawal(
+                            tx, user.id, withdrawAmount,
+                            maxWithdrawApplicationsPerDay, startOfToday, endOfToday
+                        );
 
                         const withdrawal = await tx.withdraw.create({
                             data: {
@@ -936,16 +937,6 @@ export const paymentRoutes = (app: OpenAPIHono) => {
                         return { updatedUser, withdrawal };
                     }
                 );
-
-                if (user.hasIllegalBetPenalty) {
-                    await prisma.user.update({
-                        where: { id: user.id },
-                        data: {
-                            hasIllegalBetPenalty: false,
-                            illegalBetPenaltyFactor: null,
-                        },
-                    });
-                }
 
                 WebSocketManager.publishToUser(user.id, "account-balance", {
                     balance: updatedUser.balance,
@@ -1085,13 +1076,10 @@ export const paymentRoutes = (app: OpenAPIHono) => {
 
             const { updatedUser, withdrawal } = await prisma.$transaction(
                 async (tx) => {
-                    const updatedUser = await tx.user.update({
-                        where: { id: user.id },
-                        data: { balance: { decrement: amount } },
-                        select: {
-                            balance: true,
-                        },
-                    });
+                    const updatedUser = await debitWithdrawal(
+                        tx, user.id, amount,
+                        maxWithdrawApplicationsPerDay, startOfToday, endOfToday
+                    );
 
                     const withdrawal = await tx.withdraw.create({
                         data: {
@@ -1109,16 +1097,6 @@ export const paymentRoutes = (app: OpenAPIHono) => {
                     return { updatedUser, withdrawal };
                 }
             );
-
-            if (user.hasIllegalBetPenalty) {
-                await prisma.user.update({
-                    where: { id: user.id },
-                    data: {
-                        hasIllegalBetPenalty: false,
-                        illegalBetPenaltyFactor: null,
-                    },
-                });
-            }
 
             WebSocketManager.publishToUser(user.id, "account-balance", {
                 balance: updatedUser.balance,
@@ -1148,6 +1126,9 @@ export const paymentRoutes = (app: OpenAPIHono) => {
                 HTTP_STATUS.OK
             );
         } catch (error) {
+            if (error instanceof WithdrawalValidationError) {
+                return apiError(c, error.message, HTTP_STATUS.BAD_REQUEST);
+            }
             logger.error(error);
             return apiError(
                 c,

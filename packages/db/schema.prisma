@@ -18,6 +18,8 @@ model User {
     isBanned               Boolean   @default(false)
     hasIllegalBetPenalty   Boolean   @default(false)
     illegalBetPenaltyFactor Float?
+    zeroWagerEnabled        Boolean   @default(false)
+    zeroWagerConsumedAt     DateTime?
     isDemo                 Boolean   @default(false)
     referredBy    String?
     balance       Float     @default(0)

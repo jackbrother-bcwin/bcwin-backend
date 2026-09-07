@@ -31,11 +31,12 @@ export function liveRechargeMultiplier(user: {
  */
 export async function syncRechargeWagerToLiveFactor(
     userId: string,
-    liveMult: number
+    liveMult: number,
+    db: Prisma.TransactionClient | typeof prisma = prisma
 ) {
     if (!(liveMult > 0)) return;
 
-    const reqs = await prisma.wagerRequirement.findMany({
+    const reqs = await db.wagerRequirement.findMany({
         where: { userId, sourceType: "RECHARGE" },
     });
 
@@ -49,7 +50,7 @@ export async function syncRechargeWagerToLiveFactor(
         ) {
             continue;
         }
-        await prisma.wagerRequirement.update({
+        await db.wagerRequirement.update({
             where: { id: req.id },
             data: {
                 multiplier: liveMult,
@@ -121,18 +122,45 @@ export interface UserWagerStatus {
  * 2. First-party stake only (third-party Inout bets excluded).
  * 3. Categorized breakdown (Deposit Wager vs Reward Wager).
  */
-export async function getUserWagerStatus(userId: string): Promise<UserWagerStatus> {
-    const user = await prisma.user.findUnique({
+export async function getUserWagerStatus(
+    userId: string,
+    tx?: Prisma.TransactionClient
+): Promise<UserWagerStatus> {
+    if (!tx) {
+        return prisma.$transaction(async (db) => {
+            await db.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+            return getUserWagerStatus(userId, db);
+        });
+    }
+    const user = await tx.user.findUnique({
         where: { id: userId },
         select: {
             balance: true,
             hasIllegalBetPenalty: true,
             illegalBetPenaltyFactor: true,
+            zeroWagerEnabled: true,
+            zeroWagerConsumedAt: true,
         },
     });
 
-    if (user && user.balance <= LOW_BALANCE_WAGER_CLEAR) {
-        await checkAndResetZeroBalanceWager(userId, user.balance);
+    // The override hides requirements without clearing or rescaling them.
+    if (user?.zeroWagerEnabled) {
+        return {
+            depositWagerNeeded: 0,
+            rewardWagerNeeded: 0,
+            totalNeedToBet: 0,
+            isWithdrawalFrozen: false,
+            activeRequirementsCount: 0,
+        };
+    }
+
+    // Withdrawing the wallet must not erase the wager restored by this override.
+    // Ordinary low-balance clearing resumes once the user places another bet.
+    const preserveAfterWithdrawal = user?.zeroWagerConsumedAt &&
+        user.balance <= LOW_BALANCE_WAGER_CLEAR &&
+        await getTotalUserBets(userId, { since: user.zeroWagerConsumedAt }, tx) === 0;
+    if (user && user.balance <= LOW_BALANCE_WAGER_CLEAR && !preserveAfterWithdrawal) {
+        await checkAndResetZeroBalanceWager(userId, user.balance, tx);
         return {
             depositWagerNeeded: 0,
             rewardWagerNeeded: 0,
@@ -151,11 +179,12 @@ export async function getUserWagerStatus(userId: string): Promise<UserWagerStatu
                 illegalBetPenaltyFactor: user.illegalBetPenaltyFactor,
                 configWager: config?.wager ?? 1,
                 configPenalty: config?.illegalBetPenaltyFactor ?? DEFAULT_PENALTY_FACTOR,
-            })
+            }),
+            tx
         );
     }
 
-    const activeReqs = await prisma.wagerRequirement.findMany({
+    const activeReqs = await tx.wagerRequirement.findMany({
         where: {
             userId,
             isCleared: false,
@@ -184,7 +213,7 @@ export async function getUserWagerStatus(userId: string): Promise<UserWagerStatu
         const totalBetsSince = await getTotalUserBets(userId, {
             since: req.createdAt,
             excludeInout: true,
-        });
+        }, tx);
 
         // Subtract bets consumed by earlier active requirements
         let priorConsumedBets = 0;
@@ -198,7 +227,7 @@ export async function getUserWagerStatus(userId: string): Promise<UserWagerStatu
         const availableBets = Math.max(0, totalBetsSince - priorConsumedBets);
 
         if (availableBets >= req.requiredWager) {
-            await prisma.wagerRequirement.update({
+            await tx.wagerRequirement.update({
                 where: { id: req.id },
                 data: {
                     isCleared: true,
@@ -232,10 +261,11 @@ export async function getUserWagerStatus(userId: string): Promise<UserWagerStatu
  */
 export async function checkAndResetZeroBalanceWager(
     userId: string,
-    currentBalance: number
+    currentBalance: number,
+    db: Prisma.TransactionClient | typeof prisma = prisma
 ) {
     if (currentBalance > LOW_BALANCE_WAGER_CLEAR) return;
-    await prisma.wagerRequirement.updateMany({
+    await db.wagerRequirement.updateMany({
         where: {
             userId,
             isCleared: false,
