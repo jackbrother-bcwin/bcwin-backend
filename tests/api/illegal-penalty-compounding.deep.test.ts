@@ -84,6 +84,10 @@ describe("Compounding illegal-bet penalty", () => {
             const choices = game === "5D" ? ["LOW", "HIGH"] : ["BIG", "SMALL"];
             const bets = choices.map((betChoice) => ({
                 id: crypto.randomUUID(), userId: f.user.id, periodId, betAmount: 10, betChoice,
+                betType: game === "WINGO" || game === "TRXWINGO" ? "SIZE"
+                    : game === "MOTO" ? "BIG_SMALL" : betChoice,
+                ...(game === "5D" ? { betCategory: "POSITION", position: "A" } : {}),
+                ...(game === "MOTO" ? { targetPosition: "FIRST" } : {}),
             }));
             await detectSettledIllegalBets(game, bets);
             expect(await factor(f.user.id)).toBe(base ** (i + 1));

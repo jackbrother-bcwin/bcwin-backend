@@ -1,12 +1,9 @@
 import { prisma, type Prisma } from "@bcwin/db";
 import { Cache, CacheKey } from "@bcwin/cache";
+import { findFullNumberCoverage, isIllegalBetPair, type IllegalBetGame, type IllegalBetInput } from "./rules";
 
-export type IllegalBetGame = "WINGO" | "TRXWINGO" | "5D" | "K3" | "MOTO";
-type Bet = { id: string; userId: string; periodId: string; betAmount: number; betChoice: string };
-const opposites: Record<string, string> = {
-    RED: "GREEN", GREEN: "RED", BIG: "SMALL", SMALL: "BIG",
-    ODD: "EVEN", EVEN: "ODD", LOW: "HIGH", HIGH: "LOW",
-};
+export type { IllegalBetGame } from "./rules";
+type Bet = IllegalBetInput;
 
 /** The caller holds the user's row lock, including when called during placement. */
 export async function applyIllegalRoundPenalty(
@@ -16,23 +13,26 @@ export async function applyIllegalRoundPenalty(
 ) {
     const first = bets[0];
     if (!first || bets.length < 2) return false;
-    const allowed = game === "5D" ? ["LOW", "HIGH", "ODD", "EVEN"]
-        : game === "WINGO" || game === "TRXWINGO" ? ["RED", "GREEN", "BIG", "SMALL"]
-        : ["BIG", "SMALL", "ODD", "EVEN"];
     const roundPrefix = `${game}:${first.periodId}:${first.userId}:`;
     const records: Prisma.IllegalBetCreateManyInput[] = [];
     for (let i = 0; i < bets.length; i++) {
         const a = bets[i];
-        if (!allowed.includes(a.betChoice)) continue;
         for (let j = i + 1; j < bets.length; j++) {
             const b = bets[j];
-            if (a.betAmount !== b.betAmount || opposites[a.betChoice] !== b.betChoice) continue;
+            if (!isIllegalBetPair(game, a, b)) continue;
             records.push({
                 userId: first.userId, betAmount: a.betAmount, betGame: game,
                 betType: `${a.betChoice}_${b.betChoice}`,
                 penaltyEventKey: roundPrefix + [a.id, b.id].sort().join(":"),
             });
         }
+    }
+    for (const coverage of findFullNumberCoverage(game, bets)) {
+        records.push({
+            userId: first.userId, betAmount: coverage.bets[0].betAmount, betGame: game,
+            betType: `${coverage.scope}_ALL_NUMBERS`,
+            penaltyEventKey: roundPrefix + "coverage:" + coverage.bets.map((bet) => bet.id).sort().join(":"),
+        });
     }
     if (!records.length) return false;
 
@@ -62,15 +62,19 @@ export async function applyIllegalRoundPenalty(
 export async function detectPlacedIllegalBet(tx: Prisma.TransactionClient, game: IllegalBetGame, bet: Bet) {
     const args = {
         where: { userId: bet.userId, periodId: bet.periodId },
-        select: { id: true, userId: true, periodId: true, betAmount: true, betChoice: true },
+        select: { id: true, userId: true, periodId: true, betAmount: true, betType: true, betChoice: true },
     };
     let bets: Bet[];
     switch (game) {
         case "WINGO": bets = await tx.wingoBet.findMany(args); break;
         case "TRXWINGO": bets = await tx.trxWingoBet.findMany(args); break;
-        case "5D": bets = await tx.fiveDBet.findMany(args); break;
+        case "5D": bets = await tx.fiveDBet.findMany({
+            ...args, select: { ...args.select, betCategory: true, position: true },
+        }); break;
         case "K3": bets = await tx.k3Bet.findMany(args); break;
-        case "MOTO": bets = await tx.motoBet.findMany(args); break;
+        case "MOTO": bets = await tx.motoBet.findMany({
+            ...args, select: { ...args.select, targetPosition: true },
+        }); break;
     }
     return applyIllegalRoundPenalty(tx, game, bets);
 }
