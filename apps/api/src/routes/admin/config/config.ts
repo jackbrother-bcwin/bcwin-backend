@@ -63,7 +63,7 @@ const ConfigSchema = z.object({
         example: 1.0,
     }),
     illegalBetPenaltyFactor: z.number().openapi({
-        description: "Default illegal betting penalty factor for withdrawal",
+        description: "Base multiplier applied for each new illegal round; existing accumulated penalties are preserved",
         example: 3,
     }),
     maxWithdrawApplicationsPerDay: z.number().openapi({
@@ -178,7 +178,7 @@ const UpdateConfigBodySchema = z.object({
         example: 1.0,
     }),
     illegalBetPenaltyFactor: z.number().positive().optional().openapi({
-        description: "Default illegal betting penalty factor for withdrawal",
+        description: "Base multiplier applied for each new illegal round; existing accumulated penalties are preserved",
         example: 3,
     }),
     announcement: z.string().optional().nullable().openapi({
@@ -520,16 +520,7 @@ export const systemConfigRoutes = (app: OpenAPIHono) => {
                 updatedAt: config.updatedAt.toISOString(),
             };
 
-            // Penalized users store a copy of the factor. Raising Config 3x → 5x
-            // must move those rows or need-to-bet stays at 3x.
-            if (updates.illegalBetPenaltyFactor !== undefined) {
-                await prisma.user.updateMany({
-                    where: { hasIllegalBetPenalty: true },
-                    data: {
-                        illegalBetPenaltyFactor: updates.illegalBetPenaltyFactor,
-                    },
-                });
-            }
+            // The base applies to future offenses; preserve accumulated user penalties.
 
             // Immediately bust maintenance cache if the toggle changed
             if (updates.maintananceMode !== undefined || updates.maintananceMessage !== undefined) {

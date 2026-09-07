@@ -1,3 +1,4 @@
+import { detectSettledIllegalBets } from "@bcwin/illegal-bets";
 import { prisma } from "@bcwin/db";
 import Logger from "@bcwin/logger";
 import type { MotoBet } from "@bcwin/db";
@@ -207,7 +208,7 @@ export class MotoBetSettlement {
                 };
 
                 // Detect illegal bets for this period
-                this.detectIllegalBets(period.motoBets);
+                await this.detectIllegalBets(period.motoBets);
 
                 // Collect bets with their results
                 for (const bet of period.motoBets) {
@@ -332,89 +333,6 @@ export class MotoBetSettlement {
     }
 
     private async detectIllegalBets(bets: MotoBet[]): Promise<void> {
-        try {
-            const betsByUser = new Map<string, MotoBet[]>();
-            for (const bet of bets) {
-                if (!betsByUser.has(bet.userId)) {
-                    betsByUser.set(bet.userId, []);
-                }
-                betsByUser.get(bet.userId)!.push(bet);
-            }
-
-            const illegalBetsData: {
-                userId: string;
-                betAmount: number;
-                betGame: string;
-                betType: string;
-            }[] = [];
-
-            const oppositePairs = [
-                ["BIG", "SMALL"],
-                ["SMALL", "BIG"],
-                ["ODD", "EVEN"],
-                ["EVEN", "ODD"],
-            ];
-
-            for (const [userId, userBets] of betsByUser) {
-                if (userBets.length < 2) continue;
-
-                // We want to find pairs of bets that are opposite and have the same amount
-                // To avoid duplicates, we can iterate indices
-                // const matchedIndices = new Set<number>();
-
-                for (let i = 0; i < userBets.length; i++) {
-                    for (let j = i + 1; j < userBets.length; j++) {
-                        const bet1 = userBets[i];
-                        const bet2 = userBets[j];
-
-                        if (bet1.betAmount === bet2.betAmount) {
-                            const isOpposite = oppositePairs.some(
-                                (pair) =>
-                                    pair[0] === bet1.betChoice &&
-                                    pair[1] === bet2.betChoice
-                            );
-
-                            if (isOpposite) {
-                                illegalBetsData.push({
-                                    userId,
-                                    betAmount: bet1.betAmount,
-                                    betGame: "MOTO",
-                                    betType: `${bet1.betChoice}_${bet2.betChoice}`,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (illegalBetsData.length > 0) {
-                await prisma.illegalBet.createMany({
-                    data: illegalBetsData,
-                });
-
-                const config = await prisma.config.findFirst();
-                const penaltyFactor = config?.illegalBetPenaltyFactor ?? 3.0;
-                const affectedUserIds = [
-                    ...new Set(illegalBetsData.map((b) => b.userId)),
-                ];
-
-                await prisma.user.updateMany({
-                    where: {
-                        id: { in: affectedUserIds },
-                        hasIllegalBetPenalty: false,
-                    },
-                    data: {
-                        hasIllegalBetPenalty: true,
-                        illegalBetPenaltyFactor: penaltyFactor,
-                    },
-                });
-
-                logger.info(
-                    `Detected and recorded ${illegalBetsData.length} illegal bets for users ${affectedUserIds.join(", ")}, assigned ${penaltyFactor}x penalty`
-                );
-            }
-        } catch (error) {
-            logger.error("Error detecting illegal bets:", error);
-        }
+        await detectSettledIllegalBets("MOTO", bets);
     }
 }

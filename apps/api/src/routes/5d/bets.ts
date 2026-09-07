@@ -1,3 +1,4 @@
+import { detectPlacedIllegalBet, invalidatePenaltyCache } from "@bcwin/illegal-bets";
 import { OpenAPIHono, z } from "@hono/zod-openapi";
 import { createRoute } from "@hono/zod-openapi";
 
@@ -246,7 +247,7 @@ export const betRoutes = (app: OpenAPIHono) => {
 
             const contractAmount = await calculateContractAmount(betAmount);
 
-            const { result, updatedUser } = await prisma.$transaction(
+            const { result, updatedUser, penaltyChanged } = await prisma.$transaction(
                 async (tx) => {
                     const updatedUser = await debitUserBalanceForBet(
                         tx,
@@ -275,9 +276,12 @@ export const betRoutes = (app: OpenAPIHono) => {
                         },
                     });
 
-                    return { result, updatedUser };
+                    const penaltyChanged = await detectPlacedIllegalBet(tx, "5D", result);
+                    return { result, updatedUser, penaltyChanged };
                 }
             );
+
+            if (penaltyChanged) await invalidatePenaltyCache(user.id);
 
             WebSocketManager.publishToUser(user.id, "account-balance", {
                 balance: updatedUser.balance,
