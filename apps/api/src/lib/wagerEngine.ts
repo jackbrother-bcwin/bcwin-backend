@@ -118,7 +118,7 @@ export interface UserWagerStatus {
 /**
  * Computes active wager requirements for a user, enforcing:
  * 1. Timestamp-based clearing (bets placed at/after item creation).
- * 2. First-party + Inout stake (rolled-back Inout ignored).
+ * 2. First-party stake only (third-party Inout bets excluded).
  * 3. Categorized breakdown (Deposit Wager vs Reward Wager).
  */
 export async function getUserWagerStatus(userId: string): Promise<UserWagerStatus> {
@@ -183,6 +183,7 @@ export async function getUserWagerStatus(userId: string): Promise<UserWagerStatu
 
         const totalBetsSince = await getTotalUserBets(userId, {
             since: req.createdAt,
+            excludeInout: true,
         });
 
         // Subtract bets consumed by earlier active requirements

@@ -84,7 +84,7 @@ describe("Strict Bonus & Deposit Wager System Tests", () => {
         expect(status.isWithdrawalFrozen).toBe(true);
     });
 
-    test("4. Inout bets clear wager (ADR-0028)", async () => {
+    test("4. Inout bets do not clear reward wager", async () => {
         await prisma.inoutBet.create({
             data: {
                 userId: testUserId,
@@ -100,14 +100,14 @@ describe("Strict Bonus & Deposit Wager System Tests", () => {
         });
 
         const status = await getUserWagerStatus(testUserId);
-        expect(status.rewardWagerNeeded).toBe(0);
-        expect(status.totalNeedToBet).toBe(0);
-        expect(status.isWithdrawalFrozen).toBe(false);
+        expect(status.rewardWagerNeeded).toBe(50);
+        expect(status.totalNeedToBet).toBe(50);
+        expect(status.isWithdrawalFrozen).toBe(true);
     });
 
-    test("5. Rolled-back Inout does not clear; live Inout does", async () => {
+    test("5. Only first-party bets clear deposit and reward wager", async () => {
         await new Promise((r) => setTimeout(r, 20));
-        await createWagerRequirement(prisma, testUserId, "REWARD", 50);
+        await createWagerRequirement(prisma, testUserId, "RECHARGE", 100);
 
         await prisma.inoutBet.create({
             data: {
@@ -124,6 +124,7 @@ describe("Strict Bonus & Deposit Wager System Tests", () => {
             },
         });
         const stillOpen = await getUserWagerStatus(testUserId);
+        expect(stillOpen.depositWagerNeeded).toBe(100);
         expect(stillOpen.rewardWagerNeeded).toBe(50);
         expect(stillOpen.isWithdrawalFrozen).toBe(true);
 
@@ -141,9 +142,28 @@ describe("Strict Bonus & Deposit Wager System Tests", () => {
             },
         });
         const status = await getUserWagerStatus(testUserId);
-        expect(status.rewardWagerNeeded).toBe(0);
-        expect(status.totalNeedToBet).toBe(0);
-        expect(status.isWithdrawalFrozen).toBe(false);
+        expect(status.depositWagerNeeded).toBe(100);
+        expect(status.rewardWagerNeeded).toBe(50);
+        expect(status.totalNeedToBet).toBe(150);
+        expect(status.isWithdrawalFrozen).toBe(true);
+
+        const period = await prisma.wingoPeriod.findFirstOrThrow({
+            where: { wingoBets: { some: { userId: testUserId } } },
+        });
+        await prisma.wingoBet.create({
+            data: {
+                userId: testUserId,
+                periodId: period.id,
+                betAmount: 100,
+                contractAmount: 98,
+                betType: "COLOR",
+                betChoice: "RED",
+            },
+        });
+        const cleared = await getUserWagerStatus(testUserId);
+        expect(cleared.depositWagerNeeded).toBe(0);
+        expect(cleared.rewardWagerNeeded).toBe(0);
+        expect(cleared.isWithdrawalFrozen).toBe(false);
     });
 
     test("6. Zero balance resets pending reward wager requirements", async () => {
