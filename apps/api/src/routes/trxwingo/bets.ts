@@ -31,6 +31,7 @@ import { logIpActivity, IpActivityType } from "@/lib/ipActivity";
 import { syncVipLevelFromXpAsync } from "@/lib/vipLevelSync";
 import { requireLifetimeDeposit } from "@/lib/gameDepositGate";
 import { rejectIfTrxWingoBetsPaused } from "@/lib/trxWingoPauseGate";
+import { requireTrxVisit, TrxEntryError } from "@/lib/trxEntry";
 
 const logger = new Logger("trx-wingo-bets");
 
@@ -198,6 +199,7 @@ export const betRoutes = (app: OpenAPIHono) => {
 
             const { result, updatedUser, penaltyChanged } = await prisma.$transaction(
                 async (tx) => {
+                    await requireTrxVisit(tx, user.id);
                     const updatedUser = await debitUserBalanceForBet(
                         tx,
                         user.id,
@@ -307,6 +309,7 @@ export const betRoutes = (app: OpenAPIHono) => {
                 HTTP_STATUS.CREATED
             );
         } catch (error) {
+            if (error instanceof TrxEntryError) return apiError(c, error.message, HTTP_STATUS.BAD_REQUEST);
             if (error instanceof InsufficientBalanceError) {
                 return apiError(
                     c,

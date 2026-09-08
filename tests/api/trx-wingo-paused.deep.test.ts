@@ -1,12 +1,9 @@
 /**
- * TRX Win Go pause. New bets off; periods / history stay.
+ * TRX Win Go is live. Consent is required before debit; periods / history stay.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { prisma } from "@bcwin/db";
-import {
-    TRX_WINGO_BETS_LIVE,
-    TRX_WINGO_PAUSE_MESSAGE,
-} from "@bcwin/config";
+import { TRX_WINGO_BETS_LIVE } from "@bcwin/config";
 import {
     FixtureTracker,
     authCookieFor,
@@ -19,8 +16,22 @@ import {
     post,
 } from "../helpers";
 
-describe("TRX Win Go pause", () => {
-    const tracker = new FixtureTracker("trxpause");
+async function acceptTrxEntry(cookie: string) {
+    const entry = await get("/api/v1/trxwingo/entry", { cookie });
+    expect(entry.status).toBe(200);
+    expect(entry.json?.data?.available).toBe(true);
+    if (entry.json?.data?.active) return entry.json.data;
+    const accepted = await post("/api/v1/trxwingo/entry", {
+        cookie,
+        json: { quote: entry.json.data.quote },
+    });
+    expect(accepted.status).toBe(200);
+    expect(accepted.json?.data?.active).toBe(true);
+    return accepted.json.data;
+}
+
+describe("TRX Win Go live betting", () => {
+    const tracker = new FixtureTracker("trxlive");
     let cookie: string;
     let userId: string;
     let balanceBefore = 0;
@@ -39,11 +50,11 @@ describe("TRX Win Go pause", () => {
         });
     });
 
-    test("kill switch is off", () => {
-        expect(TRX_WINGO_BETS_LIVE).toBe(false);
+    test("kill switch is on", () => {
+        expect(TRX_WINGO_BETS_LIVE).toBe(true);
     });
 
-    test("POST /trxwingo/bet is paused before debit", async () => {
+    test("POST /trxwingo/bet without consent does not debit", async () => {
         const period = await createActiveTrxWingoPeriod(tracker, 300);
         const res = await post("/api/v1/trxwingo/bet", {
             cookie,
@@ -54,8 +65,8 @@ describe("TRX Win Go pause", () => {
                 betAmount: 10,
             },
         });
-        expect(res.status).toBe(503);
-        expect(String(res.json?.error ?? "")).toBe(TRX_WINGO_PAUSE_MESSAGE);
+        expect(res.status).toBe(400);
+        expect(String(res.json?.error ?? "")).toMatch(/Accept the TRX entry wager/i);
 
         const refreshed = await prisma.user.findUniqueOrThrow({
             where: { id: userId },
@@ -66,6 +77,32 @@ describe("TRX Win Go pause", () => {
             where: { userId, periodId: period.id },
         });
         expect(n).toBe(0);
+    });
+
+    test("POST /trxwingo/bet after consent places the bet", async () => {
+        await acceptTrxEntry(cookie);
+        const period = await createActiveTrxWingoPeriod(tracker, 300);
+        const res = await post("/api/v1/trxwingo/bet", {
+            cookie,
+            json: {
+                periodId: period.id,
+                betType: "COLOR",
+                betChoice: "RED",
+                betAmount: 10,
+            },
+        });
+        expect(res.status).toBe(201);
+        expect(res.json?.success).toBe(true);
+
+        const refreshed = await prisma.user.findUniqueOrThrow({
+            where: { id: userId },
+        });
+        expect(refreshed.balance).toBe(balanceBefore - 10);
+        expect(
+            await prisma.trxWingoBet.count({
+                where: { userId, periodId: period.id },
+            })
+        ).toBe(1);
     });
 
     test("GET periods / results / bets still serve", async () => {
