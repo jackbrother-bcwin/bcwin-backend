@@ -146,7 +146,7 @@ describe("Admin bounded history and grouped hub reads", () => {
     });
     test("last bets and top-50 survive cache JSON round-trip", async () => {
         await Promise.all([
-            Cache.del("admin:recent-wingo:v1"),
+            Cache.del("admin:recent-wingo:v2"),
             Cache.del("admin:top-users:v1:balance"),
         ]);
         const [firstBets, secondBets] = await Promise.all([

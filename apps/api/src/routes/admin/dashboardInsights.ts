@@ -103,7 +103,7 @@ const getRecentWingoBetsRoute = createRoute({
     method: "get",
     path: "/dashboard/wingo-bets",
     tags: ["admin"],
-    summary: "Last 50 settled WinGo bets",
+    summary: "Last 100 settled WinGo bets",
     request: { cookies: authCookie },
     responses: {
         200: {
@@ -137,6 +137,12 @@ const getRecentWingoBetsRoute = createRoute({
         ...CommonResponses.unauthorized(),
         ...CommonResponses.internalServerError(),
     },
+});
+
+const getRecentTrxBetsRoute = createRoute({
+    ...getRecentWingoBetsRoute,
+    path: "/dashboard/trx-bets",
+    summary: "Last 100 settled TRX WinGo bets",
 });
 
 const getTopUsersRoute = createRoute({
@@ -451,70 +457,78 @@ export const dashboardInsightsRoutes = (app: OpenAPIHono) => {
         }
     });
 
-    app.openapi(getRecentWingoBetsRoute, async (c) => {
-        try {
-            c.header("Cache-Control", "private, no-store");
-            const payload = await cachedAdminRead("admin:recent-wingo:v1", 2, async () => {
-            const results = await prisma.wingoBetResult.findMany({
-                where: { bet: { user: REAL_USER_WHERE } },
-                take: 50,
-                orderBy: { processedAt: "desc" },
-                select: {
-                    isWin: true,
-                    winAmount: true,
-                    processedAt: true,
-                    period: {
+    for (const [game, route] of [
+        ["wingo", getRecentWingoBetsRoute],
+        ["trx", getRecentTrxBetsRoute],
+    ] as const) {
+        app.openapi(route, async (c) => {
+            try {
+                c.header("Cache-Control", "private, no-store");
+                const payload = await cachedAdminRead(`admin:recent-${game}:v2`, 2, async () => {
+                    const query = {
+                        where: { bet: { user: REAL_USER_WHERE } },
+                        take: 100,
+                        orderBy: [{ processedAt: "desc" }, { id: "desc" }],
                         select: {
-                            periodNumber: true,
-                            durationSeconds: true,
-                            resultNumber: true,
-                            resultColor: true,
-                            resultSize: true,
+                            isWin: true,
+                            winAmount: true,
+                            processedAt: true,
+                            period: {
+                                select: {
+                                    periodNumber: true,
+                                    durationSeconds: true,
+                                    resultNumber: true,
+                                    resultColor: true,
+                                    resultSize: true,
+                                },
+                            },
+                            bet: {
+                                select: {
+                                    id: true,
+                                    betType: true,
+                                    betChoice: true,
+                                    betAmount: true,
+                                    createdAt: true,
+                                    user: { select: ADMIN_USER_IDENTITY_SELECT },
+                                },
+                            },
                         },
-                    },
-                    bet: {
-                        select: {
-                            id: true,
-                            betType: true,
-                            betChoice: true,
-                            betAmount: true,
-                            createdAt: true,
-                            user: { select: ADMIN_USER_IDENTITY_SELECT },
-                        },
-                    },
-                },
-            });
+                    } as const;
+                    const results = game === "wingo"
+                        ? await prisma.wingoBetResult.findMany({ ...query, orderBy: [...query.orderBy] })
+                        : await prisma.trxWingoBetResult.findMany({ ...query, orderBy: [...query.orderBy] });
 
-            return {
-                    success: true,
-                    bets: results.map((result) => ({
-                        id: result.bet.id,
-                        user: mapAdminUserIdentity(result.bet.user),
-                        periodNumber: result.period.periodNumber,
-                        durationSeconds: result.period.durationSeconds,
-                        betType: result.bet.betType,
-                        betChoice: result.bet.betChoice,
-                        betAmount: result.bet.betAmount,
-                        resultNumber: result.period.resultNumber,
-                        resultColor: result.period.resultColor,
-                        resultSize: result.period.resultSize,
-                        status: result.isWin ? ("WON" as const) : ("LOST" as const),
-                        winAmount: result.winAmount,
-                        placedAt: result.bet.createdAt.toISOString(),
-                        settledAt: result.processedAt.toISOString(),
-                    })),
-                };
-            });
-            return c.json(payload, HTTP_STATUS.OK);
-        } catch (error) {
-            logger.error("Failed to load recent settled WinGo bets", error);
-            return apiError(
-                c,
-                "Failed to load settled WinGo bets",
-                HTTP_STATUS.INTERNAL_SERVER_ERROR
-            );
-        }
-    });
+                    return {
+                        success: true,
+                        bets: results.map((result) => ({
+                            id: result.bet.id,
+                            user: mapAdminUserIdentity(result.bet.user),
+                            periodNumber: result.period.periodNumber,
+                            durationSeconds: result.period.durationSeconds,
+                            betType: result.bet.betType,
+                            betChoice: result.bet.betChoice,
+                            betAmount: result.bet.betAmount,
+                            resultNumber: result.period.resultNumber,
+                            resultColor: result.period.resultColor,
+                            resultSize: result.period.resultSize,
+                            status: result.isWin ? ("WON" as const) : ("LOST" as const),
+                            winAmount: result.winAmount,
+                            placedAt: result.bet.createdAt.toISOString(),
+                            settledAt: result.processedAt.toISOString(),
+                        })),
+                    };
+                });
+                return c.json(payload, HTTP_STATUS.OK);
+            } catch (error) {
+                logger.error(`Failed to load recent settled ${game} bets`, error);
+                return apiError(
+                    c,
+                    `Failed to load settled ${game} bets`,
+                    HTTP_STATUS.INTERNAL_SERVER_ERROR
+                );
+            }
+        });
+    }
 
     app.openapi(getTopUsersRoute, async (c) => {
         try {

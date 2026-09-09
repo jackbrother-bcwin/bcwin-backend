@@ -267,12 +267,12 @@ describe("Admin dashboard insights", () => {
     });
 
     test("recent list returns settled bets with user and draw result", async () => {
-        await Cache.del("admin:recent-wingo:v1");
+        await Cache.del("admin:recent-wingo:v2");
         const response = await get("/api/v1/admin/dashboard/wingo-bets", {
             cookie: adminCookie,
         });
         expect(response.status).toBe(200);
-        expect(response.json?.bets?.length).toBeLessThanOrEqual(50);
+        expect(response.json?.bets?.length).toBeLessThanOrEqual(100);
 
         const row = response.json?.bets?.find(
             (bet: { id: string }) => bet.id === settledBetId
