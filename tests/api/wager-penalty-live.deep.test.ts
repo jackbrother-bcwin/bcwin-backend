@@ -64,6 +64,7 @@ describe("Live recharge wager vs admin penalty", () => {
         expect(req?.requiredWager).toBe(300);
         const status = await getUserWagerStatus(userId);
         expect(status.depositWagerNeeded).toBe(300);
+        expect(status.penaltyWagerNeeded).toBe(200);
         expect(status.isWithdrawalFrozen).toBe(true);
     });
 
@@ -87,6 +88,7 @@ describe("Live recharge wager vs admin penalty", () => {
 
         const status = await getUserWagerStatus(userId);
         expect(status.depositWagerNeeded).toBe(300);
+        expect(status.penaltyWagerNeeded).toBe(200);
         expect(status.isWithdrawalFrozen).toBe(true);
 
         const row = await prisma.wagerRequirement.findFirstOrThrow({
@@ -127,6 +129,7 @@ describe("Live recharge wager vs admin penalty", () => {
 
         const status = await getUserWagerStatus(userId);
         expect(status.depositWagerNeeded).toBe(200);
+        expect(status.penaltyWagerNeeded).toBe(200);
         expect(status.isWithdrawalFrozen).toBe(true);
     });
 
@@ -140,7 +143,9 @@ describe("Live recharge wager vs admin penalty", () => {
             },
         });
         await createWagerRequirement(prisma, userId, "RECHARGE", 100);
-        expect((await getUserWagerStatus(userId)).depositWagerNeeded).toBe(500);
+        const status = await getUserWagerStatus(userId);
+        expect(status.depositWagerNeeded).toBe(500);
+        expect(status.penaltyWagerNeeded).toBe(400);
     });
 
     test("raising 3x to 5x increases remaining on the same deposit", async () => {

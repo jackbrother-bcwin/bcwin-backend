@@ -35,10 +35,8 @@ export async function debitWithdrawal(
         where: { id: userId },
         data: {
             balance: { decrement: amount },
-            zeroWagerEnabled: false,
-            ...(user.zeroWagerEnabled
-                ? { zeroWagerConsumedAt: new Date() }
-                : { hasIllegalBetPenalty: false, illegalBetPenaltyFactor: null }),
+            hasIllegalBetPenalty: false,
+            illegalBetPenaltyFactor: null,
         },
         select: { balance: true },
     });

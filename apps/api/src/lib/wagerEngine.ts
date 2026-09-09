@@ -109,7 +109,10 @@ export async function createWagerRequirement(
 }
 
 export interface UserWagerStatus {
+    /** Combined basic deposit and illegal-penalty recharge wager. */
     depositWagerNeeded: number;
+    /** Illegal-penalty portion of depositWagerNeeded. */
+    penaltyWagerNeeded: number;
     rewardWagerNeeded: number;
     totalNeedToBet: number;
     isWithdrawalFrozen: boolean;
@@ -120,7 +123,7 @@ export interface UserWagerStatus {
  * Computes active wager requirements for a user, enforcing:
  * 1. Timestamp-based clearing (bets placed at/after item creation).
  * 2. First-party stake only (third-party Inout bets excluded).
- * 3. Categorized breakdown (Deposit Wager vs Reward Wager).
+ * 3. Categorized breakdown, including the illegal-penalty share of recharge wager.
  */
 export async function getUserWagerStatus(
     userId: string,
@@ -138,31 +141,14 @@ export async function getUserWagerStatus(
             balance: true,
             hasIllegalBetPenalty: true,
             illegalBetPenaltyFactor: true,
-            zeroWagerEnabled: true,
-            zeroWagerConsumedAt: true,
         },
     });
 
-    // The override hides requirements without clearing or rescaling them.
-    if (user?.zeroWagerEnabled) {
-        return {
-            depositWagerNeeded: 0,
-            rewardWagerNeeded: 0,
-            totalNeedToBet: 0,
-            isWithdrawalFrozen: false,
-            activeRequirementsCount: 0,
-        };
-    }
-
-    // Withdrawing the wallet must not erase the wager restored by this override.
-    // Ordinary low-balance clearing resumes once the user places another bet.
-    const preserveAfterWithdrawal = user?.zeroWagerConsumedAt &&
-        user.balance <= LOW_BALANCE_WAGER_CLEAR &&
-        await getTotalUserBets(userId, { since: user.zeroWagerConsumedAt }, tx) === 0;
-    if (user && user.balance <= LOW_BALANCE_WAGER_CLEAR && !preserveAfterWithdrawal) {
+    if (user && user.balance <= LOW_BALANCE_WAGER_CLEAR) {
         await checkAndResetZeroBalanceWager(userId, user.balance, tx);
         return {
             depositWagerNeeded: 0,
+            penaltyWagerNeeded: 0,
             rewardWagerNeeded: 0,
             totalNeedToBet: 0,
             isWithdrawalFrozen: false,
@@ -170,8 +156,14 @@ export async function getUserWagerStatus(
         };
     }
 
+    const config = await SystemSettings.get();
+    const baseRechargeMultiplier = liveRechargeMultiplier({
+        hasIllegalBetPenalty: false,
+        illegalBetPenaltyFactor: null,
+        configWager: config?.wager ?? 1,
+    });
+
     if (user) {
-        const config = await SystemSettings.get();
         await syncRechargeWagerToLiveFactor(
             userId,
             liveRechargeMultiplier({
@@ -197,6 +189,7 @@ export async function getUserWagerStatus(
     if (activeReqs.length === 0) {
         return {
             depositWagerNeeded: 0,
+            penaltyWagerNeeded: 0,
             rewardWagerNeeded: 0,
             totalNeedToBet: 0,
             isWithdrawalFrozen: false,
@@ -205,6 +198,7 @@ export async function getUserWagerStatus(
     }
 
     let depositWagerNeeded = 0;
+    let penaltyWagerNeeded = 0;
     let rewardWagerNeeded = 0;
 
     for (let i = 0; i < activeReqs.length; i++) {
@@ -238,6 +232,15 @@ export async function getUserWagerStatus(
             const needed = Math.ceil(req.requiredWager - availableBets);
             if (req.sourceType === "RECHARGE") {
                 depositWagerNeeded += needed;
+                const baseRequiredWager = Math.min(
+                    req.requiredWager,
+                    Math.ceil(req.amount * baseRechargeMultiplier)
+                );
+                const baseNeeded = Math.min(
+                    needed,
+                    Math.max(0, Math.ceil(baseRequiredWager - availableBets))
+                );
+                penaltyWagerNeeded += needed - baseNeeded;
             } else {
                 rewardWagerNeeded += needed;
             }
@@ -248,6 +251,7 @@ export async function getUserWagerStatus(
 
     return {
         depositWagerNeeded,
+        penaltyWagerNeeded,
         rewardWagerNeeded,
         totalNeedToBet,
         isWithdrawalFrozen: totalNeedToBet > 0,

@@ -57,7 +57,6 @@ export const UserItemSchema = z.object({
         description: "Has illegal bet withdrawal penalty",
         example: false,
     }),
-    zeroWagerEnabled: z.boolean().optional(),
     illegalBetPenaltyFactor: z.number().nullable().openapi({
         description: "Withdrawal penalty factor",
         example: 3.0,
@@ -220,6 +219,26 @@ export const GetUsersResponseSchema = z.object({
 // });
 
 export const UserStatsSchema = UserItemSchema.extend({
+    currentWagerMultiplier: z.number().openapi({
+        description: "Current recharge wager multiplier applied to the user",
+        example: 3,
+    }),
+    totalWagerAmount: z.number().openapi({
+        description: "Total remaining wager amount before withdrawal",
+        example: 12000,
+    }),
+    depositWagerNeeded: z.number().openapi({
+        description: "Remaining basic deposit wager, excluding illegal penalty uplift",
+        example: 8000,
+    }),
+    penaltyWagerNeeded: z.number().openapi({
+        description: "Remaining illegal-bet penalty wager uplift",
+        example: 2000,
+    }),
+    rewardWagerNeeded: z.number().openapi({
+        description: "Remaining reward wager",
+        example: 4000,
+    }),
     bank: z
         .object({
             fullName: z.string().nullable(),

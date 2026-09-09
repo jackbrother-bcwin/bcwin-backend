@@ -8,8 +8,43 @@ import { authCookie, GetUserStatsResponseSchema } from "@/schemas";
 import { prisma } from "@bcwin/db";
 import { Cache, CacheKey } from "@bcwin/cache";
 import { calculateUserStats } from "./helpers";
+import { SystemSettings } from "@bcwin/config";
+import { getUserWagerStatus, liveRechargeMultiplier } from "@/lib/wagerEngine";
 
 const logger = new Logger("admin-users-stats");
+
+async function getLiveWagerSummary(id: string) {
+    const [user, config, status] = await Promise.all([
+        prisma.user.findUnique({
+            where: { id },
+            select: {
+                hasIllegalBetPenalty: true,
+                illegalBetPenaltyFactor: true,
+            },
+        }),
+        SystemSettings.get(),
+        getUserWagerStatus(id),
+    ]);
+    if (!user) return null;
+    const basicDepositWagerNeeded = Math.max(
+        0,
+        status.depositWagerNeeded - status.penaltyWagerNeeded
+    );
+    return {
+        hasIllegalBetPenalty: user.hasIllegalBetPenalty,
+        illegalBetPenaltyFactor: user.illegalBetPenaltyFactor,
+        currentWagerMultiplier: liveRechargeMultiplier({
+            hasIllegalBetPenalty: user.hasIllegalBetPenalty,
+            illegalBetPenaltyFactor: user.illegalBetPenaltyFactor,
+            configWager: config?.wager ?? 1,
+            configPenalty: config?.illegalBetPenaltyFactor,
+        }),
+        totalWagerAmount: status.totalNeedToBet,
+        depositWagerNeeded: basicDepositWagerNeeded,
+        penaltyWagerNeeded: status.penaltyWagerNeeded,
+        rewardWagerNeeded: status.rewardWagerNeeded,
+    };
+}
 
 const getUserStatsRoute = createRoute({
     method: "get",
@@ -52,11 +87,9 @@ export const statsRoutes = (app: OpenAPIHono) => {
             }>(cacheKey);
 
             if (cachedData) {
-                const current = await prisma.user.findUnique({
-                    where: { id }, select: { zeroWagerEnabled: true },
-                });
-                if (!current) return apiError(c, "User not found", HTTP_STATUS.BAD_REQUEST);
-                cachedData.user.zeroWagerEnabled = current.zeroWagerEnabled;
+                const wager = await getLiveWagerSummary(id);
+                if (!wager) return apiError(c, "User not found", HTTP_STATUS.BAD_REQUEST);
+                Object.assign(cachedData.user, wager);
                 return c.json(
                     {
                         success: true,
@@ -124,6 +157,8 @@ export const statsRoutes = (app: OpenAPIHono) => {
                 (manualSalaryData._sum.amount || 0) +
                 (autoSalaryData._sum.amount || 0);
             const vipLevel = user.vipLevel?.currentLevel || 0;
+            const wager = await getLiveWagerSummary(id);
+            if (!wager) return apiError(c, "User not found", HTTP_STATUS.BAD_REQUEST);
 
             const result = {
                 user: {
@@ -135,7 +170,7 @@ export const statsRoutes = (app: OpenAPIHono) => {
                     isBanned: user.isBanned,
                     hasIllegalBetPenalty: user.hasIllegalBetPenalty,
                     illegalBetPenaltyFactor: user.illegalBetPenaltyFactor,
-                    zeroWagerEnabled: user.zeroWagerEnabled,
+                    ...wager,
                     isDemo: user.isDemo,
                     role: user.role,
                     referralCode: user.referralCode,

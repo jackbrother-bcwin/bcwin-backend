@@ -63,6 +63,8 @@ model User {
     winStreak         UserWinStreak?
     vipRewardClaims   VipRewardClaim[]
     wagerRequirements WagerRequirement[]
+    wagerClearEvents   WagerClearEvent[] @relation("WagerClearUser")
+    wagerClearEventsBy WagerClearEvent[] @relation("WagerClearBy")
 
     createdAt DateTime @default(now())
     updatedAt DateTime @updatedAt
@@ -1412,4 +1414,23 @@ model WagerRequirement {
     @@index([userId])
     @@index([userId, isCleared])
     @@index([createdAt])
+}
+
+model WagerClearEvent {
+    id                      String   @id @default(uuid())
+    userId                  String
+    user                    User     @relation("WagerClearUser", fields: [userId], references: [id], onDelete: Cascade)
+    clearedById             String
+    clearedBy               User     @relation("WagerClearBy", fields: [clearedById], references: [id], onDelete: Cascade)
+    reason                  String
+    previousPenaltyFactor   Float?
+    baseWagerFactor          Float
+    beforeDepositWagerNeeded Float
+    beforeRewardWagerNeeded  Float
+    afterDepositWagerNeeded  Float
+    afterRewardWagerNeeded   Float
+    createdAt               DateTime @default(now())
+
+    @@index([userId, createdAt])
+    @@index([clearedById, createdAt])
 }
