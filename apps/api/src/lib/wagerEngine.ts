@@ -1,9 +1,8 @@
 import { prisma, Prisma } from "@bcwin/db";
 import { SystemSettings } from "@bcwin/config";
 import { getTotalUserBets } from "@/lib/utils";
-import { allocateUserWagers } from "./wagerAllocation";
 
-export type WagerCategory = "RECHARGE" | "REWARD" | "TRX_ENTRY";
+export type WagerCategory = "RECHARGE" | "REWARD";
 
 /** Inclusive. Float leftovers never hit exact 0 (ADR-0027). */
 export const LOW_BALANCE_WAGER_CLEAR = 5;
@@ -88,8 +87,6 @@ export async function createWagerRequirement(
             configWager: config?.wager ?? 1,
             configPenalty: config?.illegalBetPenaltyFactor ?? DEFAULT_PENALTY_FACTOR,
         });
-    } else if (sourceType === "TRX_ENTRY") {
-        multiplier = 5;
     } else if (sourceType === "REWARD") {
         const sysConfig = await SystemSettings.get();
         multiplier = (sysConfig as any)?.rewardWagerFactor ?? 1.0;
@@ -114,7 +111,6 @@ export async function createWagerRequirement(
 export interface UserWagerStatus {
     depositWagerNeeded: number;
     rewardWagerNeeded: number;
-    trxWagerNeeded: number;
     totalNeedToBet: number;
     isWithdrawalFrozen: boolean;
     activeRequirementsCount: number;
@@ -124,18 +120,17 @@ export interface UserWagerStatus {
  * Computes active wager requirements for a user, enforcing:
  * 1. Timestamp-based clearing (bets placed at/after item creation).
  * 2. First-party stake only (third-party Inout bets excluded).
- * 3. Each stake is allocated once, oldest requirement first, across all categories.
+ * 3. Categorized breakdown (Deposit Wager vs Reward Wager).
  */
 export async function getUserWagerStatus(
     userId: string,
-    tx?: Prisma.TransactionClient,
-    options: { ignoreZeroWager?: boolean } = {}
+    tx?: Prisma.TransactionClient
 ): Promise<UserWagerStatus> {
     if (!tx) {
         return prisma.$transaction(async (db) => {
             await db.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
-            return getUserWagerStatus(userId, db, options);
-        }, { timeout: 30_000 });
+            return getUserWagerStatus(userId, db);
+        });
     }
     const user = await tx.user.findUnique({
         where: { id: userId },
@@ -149,11 +144,10 @@ export async function getUserWagerStatus(
     });
 
     // The override hides requirements without clearing or rescaling them.
-    if (user?.zeroWagerEnabled && !options.ignoreZeroWager) {
+    if (user?.zeroWagerEnabled) {
         return {
             depositWagerNeeded: 0,
             rewardWagerNeeded: 0,
-            trxWagerNeeded: 0,
             totalNeedToBet: 0,
             isWithdrawalFrozen: false,
             activeRequirementsCount: 0,
@@ -165,12 +159,11 @@ export async function getUserWagerStatus(
     const preserveAfterWithdrawal = user?.zeroWagerConsumedAt &&
         user.balance <= LOW_BALANCE_WAGER_CLEAR &&
         await getTotalUserBets(userId, { since: user.zeroWagerConsumedAt }, tx) === 0;
-    if (user && !user.zeroWagerEnabled && user.balance <= LOW_BALANCE_WAGER_CLEAR && !preserveAfterWithdrawal) {
+    if (user && user.balance <= LOW_BALANCE_WAGER_CLEAR && !preserveAfterWithdrawal) {
         await checkAndResetZeroBalanceWager(userId, user.balance, tx);
         return {
             depositWagerNeeded: 0,
             rewardWagerNeeded: 0,
-            trxWagerNeeded: 0,
             totalNeedToBet: 0,
             isWithdrawalFrozen: false,
             activeRequirementsCount: 0,
@@ -191,23 +184,79 @@ export async function getUserWagerStatus(
         );
     }
 
-    const requirements = await allocateUserWagers(tx, userId);
-    const needed = (category: WagerCategory) => requirements
-        .filter((r) => !r.isCleared && r.sourceType === category)
-        .reduce((sum, r) => sum + Math.ceil(Math.max(0, r.requiredWager - r.wagerCleared)), 0);
-    const depositWagerNeeded = needed("RECHARGE");
-    const rewardWagerNeeded = needed("REWARD");
-    const trxWagerNeeded = needed("TRX_ENTRY");
-    const totalNeedToBet = depositWagerNeeded + rewardWagerNeeded + trxWagerNeeded;
+    const activeReqs = await tx.wagerRequirement.findMany({
+        where: {
+            userId,
+            isCleared: false,
+        },
+        orderBy: {
+            createdAt: "asc",
+        },
+    });
+
+    if (activeReqs.length === 0) {
+        return {
+            depositWagerNeeded: 0,
+            rewardWagerNeeded: 0,
+            totalNeedToBet: 0,
+            isWithdrawalFrozen: false,
+            activeRequirementsCount: 0,
+        };
+    }
+
+    let depositWagerNeeded = 0;
+    let rewardWagerNeeded = 0;
+
+    for (let i = 0; i < activeReqs.length; i++) {
+        const req = activeReqs[i];
+
+        const totalBetsSince = await getTotalUserBets(userId, {
+            since: req.createdAt,
+            excludeInout: true,
+        }, tx);
+
+        // Subtract bets consumed by earlier active requirements
+        let priorConsumedBets = 0;
+        for (let j = 0; j < i; j++) {
+            const prior = activeReqs[j];
+            if (prior.createdAt >= req.createdAt) {
+                priorConsumedBets += prior.requiredWager;
+            }
+        }
+
+        const availableBets = Math.max(0, totalBetsSince - priorConsumedBets);
+
+        if (availableBets >= req.requiredWager) {
+            await tx.wagerRequirement.update({
+                where: { id: req.id },
+                data: {
+                    isCleared: true,
+                    wagerCleared: req.requiredWager,
+                },
+            });
+        } else {
+            const needed = Math.ceil(req.requiredWager - availableBets);
+            if (req.sourceType === "RECHARGE") {
+                depositWagerNeeded += needed;
+            } else {
+                rewardWagerNeeded += needed;
+            }
+        }
+    }
+
+    const totalNeedToBet = depositWagerNeeded + rewardWagerNeeded;
+
     return {
-        depositWagerNeeded, rewardWagerNeeded, trxWagerNeeded, totalNeedToBet,
+        depositWagerNeeded,
+        rewardWagerNeeded,
+        totalNeedToBet,
         isWithdrawalFrozen: totalNeedToBet > 0,
-        activeRequirementsCount: requirements.filter((r) => !r.isCleared).length,
+        activeRequirementsCount: activeReqs.length,
     };
 }
 
 /**
- * Clears every open wager (including TRX_ENTRY) when wallet is ≤ ₹5.
+ * Clears every open wager (RECHARGE + REWARD) when wallet is ≤ ₹5.
  * Leftover rupees stay; withdraw is allowed; next recharge starts a new row.
  */
 export async function checkAndResetZeroBalanceWager(

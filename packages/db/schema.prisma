@@ -20,9 +20,6 @@ model User {
     illegalBetPenaltyFactor Float?
     zeroWagerEnabled        Boolean   @default(false)
     zeroWagerConsumedAt     DateTime?
-    wagerAccountingInitialized Boolean @default(false)
-    trxVisitId              String?
-    trxVisitRevision        Int @default(0)
     isDemo                 Boolean   @default(false)
     referredBy    String?
     balance       Float     @default(0)
@@ -66,8 +63,6 @@ model User {
     winStreak         UserWinStreak?
     vipRewardClaims   VipRewardClaim[]
     wagerRequirements WagerRequirement[]
-    wagerAllocations WagerAllocation[]
-    trxEntryConsents TrxEntryConsent[]
 
     createdAt DateTime @default(now())
     updatedAt DateTime @updatedAt
@@ -1397,7 +1392,6 @@ model LuckySpinReward {
 enum WagerRequirementType {
     RECHARGE
     REWARD
-    TRX_ENTRY
 }
 
 model WagerRequirement {
@@ -1411,7 +1405,6 @@ model WagerRequirement {
     requiredWager Float
     wagerCleared  Float                @default(0)
     isCleared     Boolean              @default(false)
-    allocations   WagerAllocation[]
 
     createdAt DateTime @default(now())
     updatedAt DateTime @updatedAt
@@ -1419,33 +1412,4 @@ model WagerRequirement {
     @@index([userId])
     @@index([userId, isCleared])
     @@index([createdAt])
-}
-
-model WagerAllocation {
-    id            String @id @default(uuid())
-    userId        String
-    user          User @relation(fields: [userId], references: [id], onDelete: Cascade)
-    requirementId String
-    requirement   WagerRequirement @relation(fields: [requirementId], references: [id], onDelete: Cascade)
-    betKey        String
-    amount        Float
-
-    @@unique([requirementId, betKey])
-    @@index([userId, betKey])
-}
-
-model TrxEntryConsent {
-    id               String @id @default(uuid())
-    userId           String
-    user             User @relation(fields: [userId], references: [id], onDelete: Cascade)
-    balance          Float
-    multiplier       Float
-    remainingBefore  Float
-    remainingAfter   Float
-    addedWager       Float
-    policyVersion    String
-    acceptedAt       DateTime @default(now())
-    endedAt          DateTime?
-
-    @@index([userId, acceptedAt])
 }

@@ -1,6 +1,5 @@
 import { Prisma } from "@bcwin/db";
 import { getUserWagerStatus } from "./wagerEngine";
-import { endTrxVisit } from "./trxEntry";
 
 export class WithdrawalValidationError extends Error {}
 
@@ -32,7 +31,6 @@ export async function debitWithdrawal(
             );
         }
     }
-    await endTrxVisit(tx, userId);
     return tx.user.update({
         where: { id: userId },
         data: {

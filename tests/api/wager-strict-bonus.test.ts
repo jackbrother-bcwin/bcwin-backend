@@ -154,8 +154,8 @@ describe("Strict Bonus & Deposit Wager System Tests", () => {
             data: {
                 userId: testUserId,
                 periodId: period.id,
-                betAmount: 150,
-                contractAmount: 147,
+                betAmount: 100,
+                contractAmount: 98,
                 betType: "COLOR",
                 betChoice: "RED",
             },
