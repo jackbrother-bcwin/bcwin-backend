@@ -98,6 +98,81 @@ describe("Permanent extra-wager clearance", () => {
         ).toBe(details.json.user.totalWagerAmount);
     });
 
+    test("admin wager summary is read-only when a live penalty would reopen a deposit", async () => {
+        const user = await createTestUser(tracker, { balance: 10_000 });
+        const penaltyFactor = Math.max(baseWagerFactor * 3, baseWagerFactor + 1);
+        await prisma.user.update({
+            where: { id: user.id },
+            data: {
+                hasIllegalBetPenalty: true,
+                illegalBetPenaltyFactor: penaltyFactor,
+            },
+        });
+        const storedRequiredWager = Math.ceil(100 * baseWagerFactor);
+        const requirement = await prisma.wagerRequirement.create({
+            data: {
+                userId: user.id,
+                sourceType: "RECHARGE",
+                amount: 100,
+                multiplier: baseWagerFactor,
+                requiredWager: storedRequiredWager,
+                wagerCleared: storedRequiredWager,
+                isCleared: true,
+            },
+        });
+
+        const details = await get(`/api/v1/admin/users/${user.id}`, {
+            cookie: adminCookie,
+        });
+        expect(details.status).toBe(200);
+        expect(details.json.user.depositWagerNeeded).toBe(storedRequiredWager);
+        expect(details.json.user.penaltyWagerNeeded).toBe(
+            Math.ceil(100 * penaltyFactor) - storedRequiredWager
+        );
+
+        const unchanged = await prisma.wagerRequirement.findUniqueOrThrow({
+            where: { id: requirement.id },
+        });
+        expect(unchanged.multiplier).toBe(baseWagerFactor);
+        expect(unchanged.requiredWager).toBe(storedRequiredWager);
+        expect(unchanged.isCleared).toBe(true);
+    });
+
+    test("admin wager summary does not wait for a user row lock", async () => {
+        const user = await createTestUser(tracker, { balance: 10_000 });
+        let announceLocked!: () => void;
+        let releaseLock!: () => void;
+        const locked = new Promise<void>((resolve) => {
+            announceLocked = resolve;
+        });
+        const release = new Promise<void>((resolve) => {
+            releaseLock = resolve;
+        });
+        const lockTransaction = prisma.$transaction(
+            async (tx) => {
+                await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${user.id} FOR UPDATE`;
+                announceLocked();
+                await release;
+            },
+            { timeout: 5_000 }
+        );
+        await locked;
+
+        let details: Awaited<ReturnType<typeof get>> | null = null;
+        try {
+            details = await Promise.race([
+                get(`/api/v1/admin/users/${user.id}`, { cookie: adminCookie }),
+                Bun.sleep(2_000).then(() => null),
+            ]);
+        } finally {
+            releaseLock();
+            await lockTransaction;
+        }
+
+        expect(details).not.toBeNull();
+        expect(details?.status).toBe(200);
+    });
+
     test("clear permanently removes reward and penalty uplift but keeps basic deposit wager", async () => {
         const f = await fixture();
         expect((await getUserWagerStatus(f.user.id)).totalNeedToBet).toBe(9_400);

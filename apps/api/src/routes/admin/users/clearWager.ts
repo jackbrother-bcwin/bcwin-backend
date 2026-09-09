@@ -10,6 +10,7 @@ import {
     getUserWagerStatus,
     liveRechargeMultiplier,
     syncRechargeWagerToLiveFactor,
+    WAGER_TRANSACTION_TIMEOUT_MS,
 } from "@/lib/wagerEngine";
 
 const logger = new Logger("admin-users-clear-wager");
@@ -56,90 +57,93 @@ export const clearWagerRoutes = (app: OpenAPIHono) => {
             const { id } = c.req.valid("param");
             const { reason } = c.req.valid("json");
             const admin = c.get("user");
+            const config = await SystemSettings.get();
 
-            const result = await prisma.$transaction(async (tx) => {
-                await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${id} FOR UPDATE`;
-                const user = await tx.user.findUnique({ where: { id } });
-                if (!user) return null;
+            const result = await prisma.$transaction(
+                async (tx) => {
+                    await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${id} FOR UPDATE`;
+                    const user = await tx.user.findUnique({ where: { id } });
+                    if (!user) return null;
 
-                const config = await SystemSettings.get();
-                const baseWagerFactor = liveRechargeMultiplier({
-                    hasIllegalBetPenalty: false,
-                    illegalBetPenaltyFactor: null,
-                    configWager: config?.wager ?? 1,
-                });
-                const beforeStatus = await getUserWagerStatus(id, tx);
-                const beforeBasicDepositWager = Math.max(
-                    0,
-                    beforeStatus.depositWagerNeeded - beforeStatus.penaltyWagerNeeded
-                );
-                const before = {
-                    multiplier: liveRechargeMultiplier({
-                        hasIllegalBetPenalty: user.hasIllegalBetPenalty,
-                        illegalBetPenaltyFactor: user.illegalBetPenaltyFactor,
-                        configWager: config?.wager ?? 1,
-                        configPenalty: config?.illegalBetPenaltyFactor,
-                    }),
-                    depositWagerNeeded: beforeBasicDepositWager,
-                    penaltyWagerNeeded: beforeStatus.penaltyWagerNeeded,
-                    rewardWagerNeeded: beforeStatus.rewardWagerNeeded,
-                    totalWagerAmount: beforeStatus.totalNeedToBet,
-                };
-
-                await tx.$executeRaw`
-                    UPDATE "WagerRequirement"
-                    SET "isCleared" = true, "wagerCleared" = "requiredWager", "updatedAt" = NOW()
-                    WHERE "userId" = ${id}
-                      AND "sourceType" = 'REWARD'
-                      AND "isCleared" = false
-                `;
-                await tx.user.update({
-                    where: { id },
-                    data: {
+                    const baseWagerFactor = liveRechargeMultiplier({
                         hasIllegalBetPenalty: false,
                         illegalBetPenaltyFactor: null,
-                        zeroWagerEnabled: false,
-                        zeroWagerConsumedAt: null,
-                    },
-                });
-                await syncRechargeWagerToLiveFactor(id, baseWagerFactor, tx);
-                const afterStatus = await getUserWagerStatus(id, tx);
-                const after = {
-                    multiplier: baseWagerFactor,
-                    depositWagerNeeded: afterStatus.depositWagerNeeded,
-                    penaltyWagerNeeded: afterStatus.penaltyWagerNeeded,
-                    rewardWagerNeeded: afterStatus.rewardWagerNeeded,
-                    totalWagerAmount: afterStatus.totalNeedToBet,
-                };
-                const clearedAt = new Date();
-
-                await tx.wagerClearEvent.create({
-                    data: {
-                        userId: id,
-                        clearedById: admin.id,
-                        reason: reason.trim(),
-                        previousPenaltyFactor: user.hasIllegalBetPenalty
-                            ? user.illegalBetPenaltyFactor
-                            : null,
-                        baseWagerFactor,
-                        beforeDepositWagerNeeded: before.depositWagerNeeded,
-                        beforeRewardWagerNeeded: before.rewardWagerNeeded,
-                        afterDepositWagerNeeded: after.depositWagerNeeded,
-                        afterRewardWagerNeeded: after.rewardWagerNeeded,
-                        createdAt: clearedAt,
-                    },
-                });
-
-                return {
-                    before,
-                    after,
-                    clearedAt: clearedAt.toISOString(),
-                    clearedWagerAmount: Math.max(
+                        configWager: config?.wager ?? 1,
+                    });
+                    const beforeStatus = await getUserWagerStatus(id, tx, config);
+                    const beforeBasicDepositWager = Math.max(
                         0,
-                        before.totalWagerAmount - after.totalWagerAmount
-                    ),
-                };
-            });
+                        beforeStatus.depositWagerNeeded - beforeStatus.penaltyWagerNeeded
+                    );
+                    const before = {
+                        multiplier: liveRechargeMultiplier({
+                            hasIllegalBetPenalty: user.hasIllegalBetPenalty,
+                            illegalBetPenaltyFactor: user.illegalBetPenaltyFactor,
+                            configWager: config?.wager ?? 1,
+                            configPenalty: config?.illegalBetPenaltyFactor,
+                        }),
+                        depositWagerNeeded: beforeBasicDepositWager,
+                        penaltyWagerNeeded: beforeStatus.penaltyWagerNeeded,
+                        rewardWagerNeeded: beforeStatus.rewardWagerNeeded,
+                        totalWagerAmount: beforeStatus.totalNeedToBet,
+                    };
+
+                    await tx.$executeRaw`
+                        UPDATE "WagerRequirement"
+                        SET "isCleared" = true, "wagerCleared" = "requiredWager", "updatedAt" = NOW()
+                        WHERE "userId" = ${id}
+                          AND "sourceType" = 'REWARD'
+                          AND "isCleared" = false
+                    `;
+                    await tx.user.update({
+                        where: { id },
+                        data: {
+                            hasIllegalBetPenalty: false,
+                            illegalBetPenaltyFactor: null,
+                            zeroWagerEnabled: false,
+                            zeroWagerConsumedAt: null,
+                        },
+                    });
+                    await syncRechargeWagerToLiveFactor(id, baseWagerFactor, tx);
+                    const afterStatus = await getUserWagerStatus(id, tx, config);
+                    const after = {
+                        multiplier: baseWagerFactor,
+                        depositWagerNeeded: afterStatus.depositWagerNeeded,
+                        penaltyWagerNeeded: afterStatus.penaltyWagerNeeded,
+                        rewardWagerNeeded: afterStatus.rewardWagerNeeded,
+                        totalWagerAmount: afterStatus.totalNeedToBet,
+                    };
+                    const clearedAt = new Date();
+
+                    await tx.wagerClearEvent.create({
+                        data: {
+                            userId: id,
+                            clearedById: admin.id,
+                            reason: reason.trim(),
+                            previousPenaltyFactor: user.hasIllegalBetPenalty
+                                ? user.illegalBetPenaltyFactor
+                                : null,
+                            baseWagerFactor,
+                            beforeDepositWagerNeeded: before.depositWagerNeeded,
+                            beforeRewardWagerNeeded: before.rewardWagerNeeded,
+                            afterDepositWagerNeeded: after.depositWagerNeeded,
+                            afterRewardWagerNeeded: after.rewardWagerNeeded,
+                            createdAt: clearedAt,
+                        },
+                    });
+
+                    return {
+                        before,
+                        after,
+                        clearedAt: clearedAt.toISOString(),
+                        clearedWagerAmount: Math.max(
+                            0,
+                            before.totalWagerAmount - after.totalWagerAmount
+                        ),
+                    };
+                },
+                { maxWait: 5_000, timeout: WAGER_TRANSACTION_TIMEOUT_MS }
+            );
 
             if (!result) return apiError(c, "User not found", HTTP_STATUS.BAD_REQUEST);
             await Promise.all([

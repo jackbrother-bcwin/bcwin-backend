@@ -21,7 +21,11 @@ import {
     checkAndCreateDailyBonuses,
     creditRechargeBonus,
 } from "@bcwin/activity-bonus";
-import { createWagerRequirement, getUserWagerStatus } from "@/lib/wagerEngine";
+import {
+    createWagerRequirement,
+    getUserWagerStatus,
+    WAGER_TRANSACTION_TIMEOUT_MS,
+} from "@/lib/wagerEngine";
 import { debitWithdrawal, WithdrawalValidationError } from "@/lib/withdrawalWager";
 import {
     isValidBankAccount,
@@ -935,7 +939,8 @@ export const paymentRoutes = (app: OpenAPIHono) => {
                         });
 
                         return { updatedUser, withdrawal };
-                    }
+                    },
+                    { maxWait: 5_000, timeout: WAGER_TRANSACTION_TIMEOUT_MS }
                 );
 
                 WebSocketManager.publishToUser(user.id, "account-balance", {
@@ -1074,11 +1079,13 @@ export const paymentRoutes = (app: OpenAPIHono) => {
                 );
             }
 
+            const wagerConfig = await Config.SystemSettings.get();
             const { updatedUser, withdrawal } = await prisma.$transaction(
                 async (tx) => {
                     const updatedUser = await debitWithdrawal(
                         tx, user.id, amount,
-                        maxWithdrawApplicationsPerDay, startOfToday, endOfToday
+                        maxWithdrawApplicationsPerDay, startOfToday, endOfToday,
+                        wagerConfig
                     );
 
                     const withdrawal = await tx.withdraw.create({
@@ -1095,7 +1102,8 @@ export const paymentRoutes = (app: OpenAPIHono) => {
                     });
 
                     return { updatedUser, withdrawal };
-                }
+                },
+                { maxWait: 5_000, timeout: WAGER_TRANSACTION_TIMEOUT_MS }
             );
 
             WebSocketManager.publishToUser(user.id, "account-balance", {

@@ -1,5 +1,8 @@
 import { Prisma } from "@bcwin/db";
-import { getUserWagerStatus } from "./wagerEngine";
+import {
+    getUserWagerStatus,
+    type WagerConfigSnapshot,
+} from "./wagerEngine";
 
 export class WithdrawalValidationError extends Error {}
 
@@ -10,7 +13,8 @@ export async function debitWithdrawal(
     amount: number,
     dailyLimit: number,
     dayStart: Date,
-    dayEnd: Date
+    dayEnd: Date,
+    wagerConfig?: WagerConfigSnapshot | null
 ) {
     await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
     const user = await tx.user.findUniqueOrThrow({ where: { id: userId } });
@@ -24,7 +28,7 @@ export async function debitWithdrawal(
         throw new WithdrawalValidationError("You have reached the maximum number of withdraw applications per day");
     }
     if (!user.isDemo) {
-        const wager = await getUserWagerStatus(userId, tx);
+        const wager = await getUserWagerStatus(userId, tx, wagerConfig);
         if (wager.isWithdrawalFrozen || wager.totalNeedToBet > 0) {
             throw new WithdrawalValidationError(
                 `Withdrawal is frozen until wager requirement of ₹${wager.totalNeedToBet} is completed`

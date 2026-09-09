@@ -1,11 +1,11 @@
 import { prisma, Prisma } from "@bcwin/db";
 import { SystemSettings } from "@bcwin/config";
-import { getTotalUserBets } from "@/lib/utils";
 
 export type WagerCategory = "RECHARGE" | "REWARD";
 
 /** Inclusive. Float leftovers never hit exact 0 (ADR-0027). */
 export const LOW_BALANCE_WAGER_CLEAR = 5;
+export const WAGER_TRANSACTION_TIMEOUT_MS = 15_000;
 
 const DEFAULT_PENALTY_FACTOR = 1;
 
@@ -36,29 +36,23 @@ export async function syncRechargeWagerToLiveFactor(
 ) {
     if (!(liveMult > 0)) return;
 
-    const reqs = await db.wagerRequirement.findMany({
-        where: { userId, sourceType: "RECHARGE" },
-    });
-
-    for (const req of reqs) {
-        const newRequired = Math.ceil(req.amount * liveMult);
-        const factorUp = newRequired > req.requiredWager;
-        if (
-            newRequired === req.requiredWager &&
-            req.multiplier === liveMult &&
-            !factorUp
-        ) {
-            continue;
-        }
-        await db.wagerRequirement.update({
-            where: { id: req.id },
-            data: {
-                multiplier: liveMult,
-                requiredWager: newRequired,
-                isCleared: factorUp ? false : req.isCleared,
-            },
-        });
-    }
+    await db.$executeRaw`
+        UPDATE "WagerRequirement"
+        SET
+            "multiplier" = ${liveMult},
+            "requiredWager" = CEIL("amount" * ${liveMult}),
+            "isCleared" = CASE
+                WHEN CEIL("amount" * ${liveMult}) > "requiredWager" THEN false
+                ELSE "isCleared"
+            END,
+            "updatedAt" = NOW()
+        WHERE "userId" = ${userId}
+          AND "sourceType" = 'RECHARGE'
+          AND (
+              "multiplier" IS DISTINCT FROM ${liveMult}
+              OR "requiredWager" IS DISTINCT FROM CEIL("amount" * ${liveMult})
+          )
+    `;
 }
 
 /**
@@ -119,6 +113,242 @@ export interface UserWagerStatus {
     activeRequirementsCount: number;
 }
 
+export interface WagerConfigSnapshot {
+    wager?: number | null;
+    illegalBetPenaltyFactor?: number | null;
+}
+
+interface WagerUserSnapshot {
+    balance: number;
+    hasIllegalBetPenalty: boolean;
+    illegalBetPenaltyFactor: number | null;
+}
+
+interface WagerRequirementStatusRow {
+    id: string;
+    sourceType: WagerCategory;
+    amount: number;
+    requiredWager: number;
+    effectiveRequiredWager: number;
+    createdAt: Date;
+    totalBetsSince: number;
+}
+
+const emptyWagerStatus = (): UserWagerStatus => ({
+    depositWagerNeeded: 0,
+    penaltyWagerNeeded: 0,
+    rewardWagerNeeded: 0,
+    totalNeedToBet: 0,
+    isWithdrawalFrozen: false,
+    activeRequirementsCount: 0,
+});
+
+/**
+ * Reads every first-party game table once, then calculates a reverse running
+ * total at each wager requirement timestamp. Inout/third-party bets are absent.
+ */
+async function loadRequirementsWithBetTotals(
+    userId: string,
+    liveRechargeFactor: number,
+    db: Prisma.TransactionClient | typeof prisma
+): Promise<WagerRequirementStatusRow[]> {
+    return db.$queryRaw<WagerRequirementStatusRow[]>`
+        WITH requirements AS MATERIALIZED (
+            SELECT
+                wr."id",
+                wr."sourceType"::text AS "sourceType",
+                wr."amount",
+                wr."requiredWager",
+                CASE
+                    WHEN wr."sourceType" = 'RECHARGE'
+                        THEN CEIL(wr."amount" * ${liveRechargeFactor})
+                    ELSE wr."requiredWager"
+                END AS "effectiveRequiredWager",
+                wr."createdAt"
+            FROM "WagerRequirement" wr
+            WHERE wr."userId" = ${userId}
+              AND (
+                  (
+                      wr."sourceType" = 'RECHARGE'
+                      AND (
+                          NOT wr."isCleared"
+                          OR CEIL(wr."amount" * ${liveRechargeFactor}) > wr."requiredWager"
+                      )
+                  )
+                  OR (wr."sourceType" = 'REWARD' AND NOT wr."isCleared")
+              )
+        ),
+        bounds AS (
+            SELECT MIN("createdAt") AS earliest
+            FROM requirements
+        ),
+        bets_by_time AS MATERIALIZED (
+            SELECT bets."createdAt", SUM(bets."betAmount")::double precision AS amount
+            FROM (
+                SELECT wb."createdAt", wb."betAmount"
+                FROM "WingoBet" wb CROSS JOIN bounds
+                WHERE wb."userId" = ${userId} AND wb."createdAt" >= bounds.earliest
+                UNION ALL
+                SELECT fb."createdAt", fb."betAmount"
+                FROM "FiveDBet" fb CROSS JOIN bounds
+                WHERE fb."userId" = ${userId} AND fb."createdAt" >= bounds.earliest
+                UNION ALL
+                SELECT kb."createdAt", kb."betAmount"
+                FROM "K3Bet" kb CROSS JOIN bounds
+                WHERE kb."userId" = ${userId} AND kb."createdAt" >= bounds.earliest
+                UNION ALL
+                SELECT mb."createdAt", mb."betAmount"
+                FROM "MotoBet" mb CROSS JOIN bounds
+                WHERE mb."userId" = ${userId} AND mb."createdAt" >= bounds.earliest
+                UNION ALL
+                SELECT tb."createdAt", tb."betAmount"
+                FROM "TrxWingoBet" tb CROSS JOIN bounds
+                WHERE tb."userId" = ${userId} AND tb."createdAt" >= bounds.earliest
+            ) bets
+            GROUP BY bets."createdAt"
+        ),
+        events AS (
+            SELECT
+                b."createdAt" AS event_at,
+                0 AS event_kind,
+                b.amount,
+                NULL::text AS requirement_id
+            FROM bets_by_time b
+            UNION ALL
+            SELECT
+                r."createdAt" AS event_at,
+                1 AS event_kind,
+                0::double precision AS amount,
+                r."id" AS requirement_id
+            FROM requirements r
+        ),
+        running_totals AS (
+            SELECT
+                requirement_id,
+                SUM(amount) OVER (
+                    ORDER BY event_at DESC, event_kind ASC
+                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                )::double precision AS total
+            FROM events
+        )
+        SELECT
+            r."id",
+            r."sourceType",
+            r."amount",
+            r."requiredWager",
+            r."effectiveRequiredWager",
+            r."createdAt",
+            COALESCE(rt.total, 0)::double precision AS "totalBetsSince"
+        FROM requirements r
+        JOIN running_totals rt ON rt.requirement_id = r."id"
+        ORDER BY r."createdAt" ASC, r."id" ASC
+    `;
+}
+
+async function calculateUserWagerStatus(
+    userId: string,
+    user: WagerUserSnapshot | null,
+    config: WagerConfigSnapshot | null,
+    db: Prisma.TransactionClient | typeof prisma,
+    persist: boolean
+): Promise<UserWagerStatus> {
+    if (!user) return emptyWagerStatus();
+
+    if (user.balance <= LOW_BALANCE_WAGER_CLEAR) {
+        if (persist) {
+            await checkAndResetZeroBalanceWager(userId, user.balance, db);
+        }
+        return emptyWagerStatus();
+    }
+
+    const baseRechargeMultiplier = liveRechargeMultiplier({
+        hasIllegalBetPenalty: false,
+        illegalBetPenaltyFactor: null,
+        configWager: config?.wager ?? 1,
+    });
+    const liveRechargeFactor = liveRechargeMultiplier({
+        hasIllegalBetPenalty: user.hasIllegalBetPenalty,
+        illegalBetPenaltyFactor: user.illegalBetPenaltyFactor,
+        configWager: config?.wager ?? 1,
+        configPenalty: config?.illegalBetPenaltyFactor ?? DEFAULT_PENALTY_FACTOR,
+    });
+
+    if (persist) {
+        await syncRechargeWagerToLiveFactor(userId, liveRechargeFactor, db);
+    }
+
+    const requirements = await loadRequirementsWithBetTotals(
+        userId,
+        liveRechargeFactor,
+        db
+    );
+    if (requirements.length === 0) return emptyWagerStatus();
+
+    let depositWagerNeeded = 0;
+    let penaltyWagerNeeded = 0;
+    let rewardWagerNeeded = 0;
+    let timestampConsumedBets = 0;
+    let previousTimestamp: number | null = null;
+    const clearedIds: string[] = [];
+
+    for (const req of requirements) {
+        const timestamp = req.createdAt.getTime();
+        if (timestamp !== previousTimestamp) {
+            timestampConsumedBets = 0;
+            previousTimestamp = timestamp;
+        }
+
+        const requiredWager = Number(req.effectiveRequiredWager);
+        const availableBets = Math.max(
+            0,
+            Number(req.totalBetsSince) - timestampConsumedBets
+        );
+        timestampConsumedBets += requiredWager;
+
+        if (availableBets >= requiredWager) {
+            if (persist) clearedIds.push(req.id);
+            continue;
+        }
+
+        const needed = Math.ceil(requiredWager - availableBets);
+        if (req.sourceType === "RECHARGE") {
+            depositWagerNeeded += needed;
+            const baseRequiredWager = Math.min(
+                requiredWager,
+                Math.ceil(Number(req.amount) * baseRechargeMultiplier)
+            );
+            const baseNeeded = Math.min(
+                needed,
+                Math.max(0, Math.ceil(baseRequiredWager - availableBets))
+            );
+            penaltyWagerNeeded += needed - baseNeeded;
+        } else {
+            rewardWagerNeeded += needed;
+        }
+    }
+
+    if (persist && clearedIds.length > 0) {
+        await db.$executeRaw`
+            UPDATE "WagerRequirement"
+            SET
+                "isCleared" = true,
+                "wagerCleared" = "requiredWager",
+                "updatedAt" = NOW()
+            WHERE "id" IN (${Prisma.join(clearedIds)})
+        `;
+    }
+
+    const totalNeedToBet = depositWagerNeeded + rewardWagerNeeded;
+    return {
+        depositWagerNeeded,
+        penaltyWagerNeeded,
+        rewardWagerNeeded,
+        totalNeedToBet,
+        isWithdrawalFrozen: totalNeedToBet > 0,
+        activeRequirementsCount: requirements.length,
+    };
+}
+
 /**
  * Computes active wager requirements for a user, enforcing:
  * 1. Timestamp-based clearing (bets placed at/after item creation).
@@ -127,14 +357,32 @@ export interface UserWagerStatus {
  */
 export async function getUserWagerStatus(
     userId: string,
-    tx?: Prisma.TransactionClient
+    tx?: Prisma.TransactionClient,
+    configSnapshot?: WagerConfigSnapshot | null
 ): Promise<UserWagerStatus> {
     if (!tx) {
-        return prisma.$transaction(async (db) => {
-            await db.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
-            return getUserWagerStatus(userId, db);
-        });
+        const config = configSnapshot === undefined
+            ? await SystemSettings.get()
+            : configSnapshot;
+        return prisma.$transaction(
+            async (db) => {
+                await db.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+                const user = await db.user.findUnique({
+                    where: { id: userId },
+                    select: {
+                        balance: true,
+                        hasIllegalBetPenalty: true,
+                        illegalBetPenaltyFactor: true,
+                    },
+                });
+                return calculateUserWagerStatus(userId, user, config, db, true);
+            },
+            { maxWait: 5_000, timeout: WAGER_TRANSACTION_TIMEOUT_MS }
+        );
     }
+    const config = configSnapshot === undefined
+        ? await SystemSettings.get()
+        : configSnapshot;
     const user = await tx.user.findUnique({
         where: { id: userId },
         select: {
@@ -144,119 +392,31 @@ export async function getUserWagerStatus(
         },
     });
 
-    if (user && user.balance <= LOW_BALANCE_WAGER_CLEAR) {
-        await checkAndResetZeroBalanceWager(userId, user.balance, tx);
-        return {
-            depositWagerNeeded: 0,
-            penaltyWagerNeeded: 0,
-            rewardWagerNeeded: 0,
-            totalNeedToBet: 0,
-            isWithdrawalFrozen: false,
-            activeRequirementsCount: 0,
-        };
-    }
+    return calculateUserWagerStatus(userId, user, config, tx, true);
+}
 
-    const config = await SystemSettings.get();
-    const baseRechargeMultiplier = liveRechargeMultiplier({
-        hasIllegalBetPenalty: false,
-        illegalBetPenaltyFactor: null,
-        configWager: config?.wager ?? 1,
-    });
-
-    if (user) {
-        await syncRechargeWagerToLiveFactor(
-            userId,
-            liveRechargeMultiplier({
-                hasIllegalBetPenalty: user.hasIllegalBetPenalty,
-                illegalBetPenaltyFactor: user.illegalBetPenaltyFactor,
-                configWager: config?.wager ?? 1,
-                configPenalty: config?.illegalBetPenaltyFactor ?? DEFAULT_PENALTY_FACTOR,
-            }),
-            tx
-        );
-    }
-
-    const activeReqs = await tx.wagerRequirement.findMany({
-        where: {
-            userId,
-            isCleared: false,
-        },
-        orderBy: {
-            createdAt: "asc",
-        },
-    });
-
-    if (activeReqs.length === 0) {
-        return {
-            depositWagerNeeded: 0,
-            penaltyWagerNeeded: 0,
-            rewardWagerNeeded: 0,
-            totalNeedToBet: 0,
-            isWithdrawalFrozen: false,
-            activeRequirementsCount: 0,
-        };
-    }
-
-    let depositWagerNeeded = 0;
-    let penaltyWagerNeeded = 0;
-    let rewardWagerNeeded = 0;
-
-    for (let i = 0; i < activeReqs.length; i++) {
-        const req = activeReqs[i];
-
-        const totalBetsSince = await getTotalUserBets(userId, {
-            since: req.createdAt,
-            excludeInout: true,
-        }, tx);
-
-        // Subtract bets consumed by earlier active requirements
-        let priorConsumedBets = 0;
-        for (let j = 0; j < i; j++) {
-            const prior = activeReqs[j];
-            if (prior.createdAt >= req.createdAt) {
-                priorConsumedBets += prior.requiredWager;
-            }
-        }
-
-        const availableBets = Math.max(0, totalBetsSince - priorConsumedBets);
-
-        if (availableBets >= req.requiredWager) {
-            await tx.wagerRequirement.update({
-                where: { id: req.id },
-                data: {
-                    isCleared: true,
-                    wagerCleared: req.requiredWager,
-                },
-            });
-        } else {
-            const needed = Math.ceil(req.requiredWager - availableBets);
-            if (req.sourceType === "RECHARGE") {
-                depositWagerNeeded += needed;
-                const baseRequiredWager = Math.min(
-                    req.requiredWager,
-                    Math.ceil(req.amount * baseRechargeMultiplier)
-                );
-                const baseNeeded = Math.min(
-                    needed,
-                    Math.max(0, Math.ceil(baseRequiredWager - availableBets))
-                );
-                penaltyWagerNeeded += needed - baseNeeded;
-            } else {
-                rewardWagerNeeded += needed;
-            }
-        }
-    }
-
-    const totalNeedToBet = depositWagerNeeded + rewardWagerNeeded;
-
-    return {
-        depositWagerNeeded,
-        penaltyWagerNeeded,
-        rewardWagerNeeded,
-        totalNeedToBet,
-        isWithdrawalFrozen: totalNeedToBet > 0,
-        activeRequirementsCount: activeReqs.length,
-    };
+/** Live admin/display snapshot. It never locks users or mutates wager rows. */
+export async function getUserWagerStatusReadOnly(
+    userId: string,
+    userSnapshot?: WagerUserSnapshot | null,
+    configSnapshot?: WagerConfigSnapshot | null
+): Promise<UserWagerStatus> {
+    const [user, config] = await Promise.all([
+        userSnapshot === undefined
+            ? prisma.user.findUnique({
+                  where: { id: userId },
+                  select: {
+                      balance: true,
+                      hasIllegalBetPenalty: true,
+                      illegalBetPenaltyFactor: true,
+                  },
+              })
+            : Promise.resolve(userSnapshot),
+        configSnapshot === undefined
+            ? SystemSettings.get()
+            : Promise.resolve(configSnapshot),
+    ]);
+    return calculateUserWagerStatus(userId, user, config, prisma, false);
 }
 
 /**

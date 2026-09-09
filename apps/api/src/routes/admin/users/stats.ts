@@ -9,23 +9,27 @@ import { prisma } from "@bcwin/db";
 import { Cache, CacheKey } from "@bcwin/cache";
 import { calculateUserStats } from "./helpers";
 import { SystemSettings } from "@bcwin/config";
-import { getUserWagerStatus, liveRechargeMultiplier } from "@/lib/wagerEngine";
+import {
+    getUserWagerStatusReadOnly,
+    liveRechargeMultiplier,
+} from "@/lib/wagerEngine";
 
 const logger = new Logger("admin-users-stats");
 
 async function getLiveWagerSummary(id: string) {
-    const [user, config, status] = await Promise.all([
+    const [user, config] = await Promise.all([
         prisma.user.findUnique({
             where: { id },
             select: {
+                balance: true,
                 hasIllegalBetPenalty: true,
                 illegalBetPenaltyFactor: true,
             },
         }),
         SystemSettings.get(),
-        getUserWagerStatus(id),
     ]);
     if (!user) return null;
+    const status = await getUserWagerStatusReadOnly(id, user, config);
     const basicDepositWagerNeeded = Math.max(
         0,
         status.depositWagerNeeded - status.penaltyWagerNeeded
