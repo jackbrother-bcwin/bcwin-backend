@@ -260,15 +260,10 @@ describe("Permanent extra-wager clearance", () => {
         const user = await prisma.user.findUniqueOrThrow({ where: { id: f.user.id } });
         expect(user.hasIllegalBetPenalty).toBe(true);
         expect(user.illegalBetPenaltyFactor).toBe(illegalPenaltyBase);
+        expect(user.penaltyWagerModel).toBe("BALANCE_SNAPSHOT");
         const status = await getUserWagerStatus(f.user.id);
-        expect(status.depositWagerNeeded).toBe(Math.ceil(1_000 * illegalPenaltyBase));
-        expect(status.penaltyWagerNeeded).toBe(
-            Math.max(
-                0,
-                Math.ceil(1_000 * illegalPenaltyBase) -
-                    Math.ceil(1_000 * baseWagerFactor)
-            )
-        );
+        expect(status.depositWagerNeeded).toBe(Math.ceil(1_000 * baseWagerFactor));
+        expect(status.penaltyWagerNeeded).toBe(Math.ceil(user.balance * illegalPenaltyBase));
         expect(status.rewardWagerNeeded).toBe(200);
     });
 

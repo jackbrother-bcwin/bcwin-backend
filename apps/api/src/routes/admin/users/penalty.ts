@@ -7,7 +7,14 @@ import { apiError, CommonResponses } from "@/lib/utils";
 import { authCookie } from "@/schemas";
 import { prisma } from "@bcwin/db";
 import { Cache, CacheKey } from "@bcwin/cache";
-import { comparePenaltyWager, liveRechargeMultiplier, syncRechargeWagerToLiveFactor, WAGER_TRANSACTION_TIMEOUT_MS } from "@bcwin/wager";
+import {
+    clearOpenPenaltyRequirements,
+    comparePenaltyWager,
+    liveRechargeMultiplier,
+    replaceBalancePenaltySnapshot,
+    syncRechargeWagerToLiveFactor,
+    WAGER_TRANSACTION_TIMEOUT_MS,
+} from "@bcwin/wager";
 import { penaltyHistoryAmounts } from "@bcwin/wager/penaltyHistory";
 
 const logger = new Logger("admin-users-penalty");
@@ -19,7 +26,7 @@ const UpdateUserPenaltyBodySchema = z.object({
         example: true,
     }),
     illegalBetPenaltyFactor: z.number().positive().optional().openapi({
-        description: "Penalty wager multiplier factor (e.g. 2, 3, 4). Defaults to system config factor if omitted when enabling penalty.",
+        description: "Penalty factor applied to wallet balance at apply (e.g. 2, 3, 4). Defaults to system config factor if omitted when enabling penalty.",
         example: 3.0,
     }),
 });
@@ -39,7 +46,7 @@ const updateUserPenaltyRoute = createRoute({
     path: "/:id/penalty",
     tags: ["admin"],
     summary: "Update user illegal betting penalty",
-    description: "Assign, update penalty factor (e.g. 2x, 3x, 4x), or remove withdrawal penalty for a user",
+    description: "Assign, update, or clear a balance×factor penalty snapshot for a user",
     request: {
         params: z.object({
             id: z.string().openapi({
@@ -85,23 +92,63 @@ export const penaltyRoutes = (app: OpenAPIHono) => {
                 const next = { hasIllegalBetPenalty, illegalBetPenaltyFactor: penaltyFactor };
                 const changed = user.hasIllegalBetPenalty !== hasIllegalBetPenalty
                     || user.illegalBetPenaltyFactor !== penaltyFactor;
-                if (changed) {
-                    const comparison = await comparePenaltyWager(tx, id, user, config, next);
-                    await tx.penaltyHistoryEvent.create({ data: {
-                        userId: id,
-                        createdAt: new Date(),
-                        action: !hasIllegalBetPenalty ? "CLEARED" : user.hasIllegalBetPenalty ? "ADJUSTED" : "APPLIED",
-                        reason: hasIllegalBetPenalty ? reason : "ADMIN",
-                        ...penaltyHistoryAmounts(comparison.previousFactor, comparison.resultingFactor,
-                            comparison.before, comparison.after),
-                    } });
+                if (!changed) {
+                    return {
+                        id: user.id,
+                        hasIllegalBetPenalty: user.hasIllegalBetPenalty,
+                        illegalBetPenaltyFactor: user.illegalBetPenaltyFactor,
+                    };
                 }
-                await syncRechargeWagerToLiveFactor(id, liveRechargeMultiplier({
-                    ...next, configWager: config?.wager ?? 1, configPenalty: config?.illegalBetPenaltyFactor,
-                }), tx);
-                return tx.user.update({ where: { id }, data: next, select: {
-                    id: true, hasIllegalBetPenalty: true, illegalBetPenaltyFactor: true,
+
+                const comparison = await comparePenaltyWager(tx, id, user, config, next);
+                const history = await tx.penaltyHistoryEvent.create({ data: {
+                    userId: id,
+                    createdAt: new Date(),
+                    action: !hasIllegalBetPenalty ? "CLEARED" : user.hasIllegalBetPenalty ? "ADJUSTED" : "APPLIED",
+                    reason: hasIllegalBetPenalty ? reason : "ADMIN",
+                    ...penaltyHistoryAmounts(comparison.previousFactor, comparison.resultingFactor,
+                        comparison.before, comparison.after),
                 } });
+
+                if (hasIllegalBetPenalty && penaltyFactor != null) {
+                    await tx.user.update({
+                        where: { id },
+                        data: {
+                            hasIllegalBetPenalty: true,
+                            illegalBetPenaltyFactor: penaltyFactor,
+                            penaltyWagerModel: "BALANCE_SNAPSHOT",
+                        },
+                    });
+                    await syncRechargeWagerToLiveFactor(id, liveRechargeMultiplier({
+                        hasIllegalBetPenalty: true,
+                        illegalBetPenaltyFactor: penaltyFactor,
+                        penaltyWagerModel: "BALANCE_SNAPSHOT",
+                        configWager: config?.wager ?? 1,
+                        configPenalty: config?.illegalBetPenaltyFactor,
+                    }), tx);
+                    await replaceBalancePenaltySnapshot(tx, id, user.balance, penaltyFactor, history.id);
+                } else {
+                    await clearOpenPenaltyRequirements(id, tx);
+                    await tx.user.update({
+                        where: { id },
+                        data: {
+                            hasIllegalBetPenalty: false,
+                            illegalBetPenaltyFactor: null,
+                            penaltyWagerModel: "LEGACY_DEPOSIT",
+                        },
+                    });
+                    await syncRechargeWagerToLiveFactor(id, liveRechargeMultiplier({
+                        hasIllegalBetPenalty: false,
+                        illegalBetPenaltyFactor: null,
+                        penaltyWagerModel: "LEGACY_DEPOSIT",
+                        configWager: config?.wager ?? 1,
+                    }), tx);
+                }
+
+                return tx.user.findUniqueOrThrow({
+                    where: { id },
+                    select: { id: true, hasIllegalBetPenalty: true, illegalBetPenaltyFactor: true },
+                });
             }, { timeout: WAGER_TRANSACTION_TIMEOUT_MS });
             if (!updatedUser) return apiError(c, "User not found", HTTP_STATUS.BAD_REQUEST);
             const penaltyFactor = updatedUser.illegalBetPenaltyFactor;
@@ -110,7 +157,6 @@ export const penaltyRoutes = (app: OpenAPIHono) => {
                 `User ${id} penalty updated. Active: ${hasIllegalBetPenalty}, Factor: ${penaltyFactor}`
             );
 
-            // Invalidate caches
             await Promise.all([
                 Cache.del(CacheKey.adminUserStats(id)),
                 Cache.del(CacheKey.adminUsers),

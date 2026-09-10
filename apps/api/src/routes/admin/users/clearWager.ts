@@ -11,6 +11,7 @@ import {
     getUserWagerStatus,
     liveRechargeMultiplier,
     syncRechargeWagerToLiveFactor,
+    usesBalancePenalty,
     WAGER_TRANSACTION_TIMEOUT_MS,
 } from "@/lib/wagerEngine";
 
@@ -72,14 +73,14 @@ export const clearWagerRoutes = (app: OpenAPIHono) => {
                         configWager: config?.wager ?? 1,
                     });
                     const beforeStatus = await getUserWagerStatus(id, tx, config);
-                    const beforeBasicDepositWager = Math.max(
-                        0,
-                        beforeStatus.depositWagerNeeded - beforeStatus.penaltyWagerNeeded
-                    );
+                    const beforeBasicDepositWager = usesBalancePenalty(user.penaltyWagerModel)
+                        ? beforeStatus.depositWagerNeeded
+                        : Math.max(0, beforeStatus.depositWagerNeeded - beforeStatus.penaltyWagerNeeded);
                     const before = {
                         multiplier: liveRechargeMultiplier({
                             hasIllegalBetPenalty: user.hasIllegalBetPenalty,
                             illegalBetPenaltyFactor: user.illegalBetPenaltyFactor,
+                            penaltyWagerModel: user.penaltyWagerModel,
                             configWager: config?.wager ?? 1,
                             configPenalty: config?.illegalBetPenaltyFactor,
                         }),
@@ -93,7 +94,7 @@ export const clearWagerRoutes = (app: OpenAPIHono) => {
                         UPDATE "WagerRequirement"
                         SET "isCleared" = true, "wagerCleared" = "requiredWager", "updatedAt" = NOW()
                         WHERE "userId" = ${id}
-                          AND "sourceType" = 'REWARD'
+                          AND "sourceType" IN ('REWARD', 'PENALTY')
                           AND "isCleared" = false
                     `;
                     await tx.user.update({
@@ -101,6 +102,7 @@ export const clearWagerRoutes = (app: OpenAPIHono) => {
                         data: {
                             hasIllegalBetPenalty: false,
                             illegalBetPenaltyFactor: null,
+                            penaltyWagerModel: "LEGACY_DEPOSIT",
                             zeroWagerEnabled: false,
                             zeroWagerConsumedAt: null,
                         },

@@ -10,8 +10,9 @@ import { Cache, CacheKey } from "@bcwin/cache";
 import { calculateUserStats } from "./helpers";
 import { SystemSettings } from "@bcwin/config";
 import {
+    displayPenaltyFactor,
     getUserWagerStatusReadOnly,
-    liveRechargeMultiplier,
+    usesBalancePenalty,
 } from "@/lib/wagerEngine";
 
 const logger = new Logger("admin-users-stats");
@@ -24,20 +25,20 @@ async function getLiveWagerSummary(id: string) {
                 balance: true,
                 hasIllegalBetPenalty: true,
                 illegalBetPenaltyFactor: true,
+                penaltyWagerModel: true,
             },
         }),
         SystemSettings.get(),
     ]);
     if (!user) return null;
     const status = await getUserWagerStatusReadOnly(id, user, config);
-    const basicDepositWagerNeeded = Math.max(
-        0,
-        status.depositWagerNeeded - status.penaltyWagerNeeded
-    );
+    const basicDepositWagerNeeded = usesBalancePenalty(user.penaltyWagerModel)
+        ? status.depositWagerNeeded
+        : Math.max(0, status.depositWagerNeeded - status.penaltyWagerNeeded);
     return {
         hasIllegalBetPenalty: user.hasIllegalBetPenalty,
         illegalBetPenaltyFactor: user.illegalBetPenaltyFactor,
-        currentWagerMultiplier: liveRechargeMultiplier({
+        currentWagerMultiplier: displayPenaltyFactor({
             hasIllegalBetPenalty: user.hasIllegalBetPenalty,
             illegalBetPenaltyFactor: user.illegalBetPenaltyFactor,
             configWager: config?.wager ?? 1,

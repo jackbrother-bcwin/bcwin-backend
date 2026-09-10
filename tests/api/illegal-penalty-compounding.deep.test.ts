@@ -30,7 +30,7 @@ describe("Compounding illegal-bet penalty", () => {
         return (await prisma.user.findUniqueOrThrow({ where: { id: userId } })).illegalBetPenaltyFactor;
     }
 
-    test("penalty compounds immediately on three illegal rounds and updates deposit wager", async () => {
+    test("penalty compounds immediately on three illegal rounds as balance×factor snapshots", async () => {
         const f = await fixture();
         await createWagerRequirement(prisma, f.user.id, "RECHARGE", 100);
         for (let round = 1; round <= 3; round++) {
@@ -38,14 +38,25 @@ describe("Compounding illegal-bet penalty", () => {
             expect((await place(f.cookie, period.id, "RED")).status).toBe(201);
             expect((await place(f.cookie, period.id, "GREEN")).status).toBe(201);
             expect(await factor(f.user.id)).toBe(base ** round);
+            const user = await prisma.user.findUniqueOrThrow({ where: { id: f.user.id } });
+            expect(user.penaltyWagerModel).toBe("BALANCE_SNAPSHOT");
+            const penalty = await prisma.wagerRequirement.findFirstOrThrow({
+                where: { userId: f.user.id, sourceType: "PENALTY", isCleared: false },
+            });
+            expect(penalty.multiplier).toBe(base ** round);
+            expect(penalty.requiredWager).toBe(Math.ceil(penalty.amount * base ** round));
             const wager = await getUserWagerStatus(f.user.id);
-            expect(wager.depositWagerNeeded).toBe(Math.ceil(100 * base ** round - round * 20));
+            // Deposits stay on Config.wager; penalty is the separate snapshot bucket.
+            expect(wager.depositWagerNeeded).toBe(Math.max(0, Math.ceil(100 - round * 20)));
+            expect(wager.penaltyWagerNeeded).toBeGreaterThan(0);
             const bets = await prisma.wingoBet.findMany({ where: { userId: f.user.id, periodId: period.id } });
             await detectSettledIllegalBets("WINGO", bets);
             expect(await factor(f.user.id)).toBe(base ** round);
+            expect(await prisma.wagerRequirement.count({
+                where: { userId: f.user.id, sourceType: "PENALTY", isCleared: false },
+            })).toBe(1);
         }
     });
-
     test("additional opposite pairs in one round are recorded without another multiplier", async () => {
         const f = await fixture();
         const period = await createActiveWingoPeriod(tracker, 300);

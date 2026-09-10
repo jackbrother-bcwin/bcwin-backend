@@ -24,6 +24,7 @@ import {
 import {
     createWagerRequirement,
     getUserWagerStatus,
+    usesBalancePenalty,
     WAGER_TRANSACTION_TIMEOUT_MS,
 } from "@/lib/wagerEngine";
 import { debitWithdrawal, WithdrawalValidationError } from "@/lib/withdrawalWager";
@@ -254,6 +255,7 @@ const WithdrawInfoResponseSchema = z.object({
         /** INR still required to wager before withdraw is allowed (0 = clear) */
         needToBet: z.number(),
         depositWagerNeeded: z.number().optional(),
+        penaltyWagerNeeded: z.number().optional(),
         rewardWagerNeeded: z.number().optional(),
         isWithdrawalFrozen: z.boolean().optional(),
         totalRecharge: z.number(),
@@ -391,9 +393,20 @@ export const paymentRoutes = (app: OpenAPIHono) => {
                 getUserWagerStatus(user.id),
             ]);
 
-            const wagerFactor = user.hasIllegalBetPenalty
-                ? (user.illegalBetPenaltyFactor ?? 3.0)
+            const dbUser = await prisma.user.findUnique({
+                where: { id: user.id },
+                select: {
+                    hasIllegalBetPenalty: true,
+                    illegalBetPenaltyFactor: true,
+                    penaltyWagerModel: true,
+                },
+            });
+            const wagerFactor = dbUser?.hasIllegalBetPenalty
+                ? (dbUser.illegalBetPenaltyFactor ?? 3.0)
                 : baseWagerFactor;
+            const depositWagerNeeded = usesBalancePenalty(dbUser?.penaltyWagerModel)
+                ? wagerStatus.depositWagerNeeded
+                : Math.max(0, wagerStatus.depositWagerNeeded - wagerStatus.penaltyWagerNeeded);
 
             const remainingWithdrawalsToday = Math.max(
                 0,
@@ -406,7 +419,8 @@ export const paymentRoutes = (app: OpenAPIHono) => {
                     success: true,
                     data: {
                         needToBet: wagerStatus.totalNeedToBet,
-                        depositWagerNeeded: wagerStatus.depositWagerNeeded,
+                        depositWagerNeeded,
+                        penaltyWagerNeeded: wagerStatus.penaltyWagerNeeded,
                         rewardWagerNeeded: wagerStatus.rewardWagerNeeded,
                         isWithdrawalFrozen: wagerStatus.isWithdrawalFrozen,
                         totalRecharge: totalUserRecharge,

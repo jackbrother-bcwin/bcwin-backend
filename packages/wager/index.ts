@@ -1,7 +1,8 @@
 import { prisma, Prisma } from "@bcwin/db";
 import { SystemSettings } from "@bcwin/config";
 
-export type WagerCategory = "RECHARGE" | "REWARD";
+export type WagerCategory = "RECHARGE" | "REWARD" | "PENALTY";
+export type PenaltyWagerModel = "LEGACY_DEPOSIT" | "BALANCE_SNAPSHOT";
 
 /** Inclusive. Float leftovers never hit exact 0 (ADR-0027). */
 export const LOW_BALANCE_WAGER_CLEAR = 5;
@@ -9,7 +10,31 @@ export const WAGER_TRANSACTION_TIMEOUT_MS = 15_000;
 
 const DEFAULT_PENALTY_FACTOR = 1;
 
+export function usesBalancePenalty(model?: PenaltyWagerModel | null): boolean {
+    return model === "BALANCE_SNAPSHOT";
+}
+
+/** RECHARGE live factor. Balance-snapshot users never uplift deposits. */
 export function liveRechargeMultiplier(user: {
+    hasIllegalBetPenalty: boolean;
+    illegalBetPenaltyFactor: number | null;
+    configWager: number;
+    configPenalty?: number | null;
+    penaltyWagerModel?: PenaltyWagerModel | null;
+}): number {
+    if (usesBalancePenalty(user.penaltyWagerModel)) {
+        return user.configWager > 0 ? user.configWager : 1;
+    }
+    if (user.hasIllegalBetPenalty) {
+        const userF = user.illegalBetPenaltyFactor;
+        if (userF != null && userF > 0) return userF;
+        const cfgF = user.configPenalty;
+        return cfgF != null && cfgF > 0 ? cfgF : DEFAULT_PENALTY_FACTOR;
+    }
+    return user.configWager > 0 ? user.configWager : 1;
+}
+
+export function displayPenaltyFactor(user: {
     hasIllegalBetPenalty: boolean;
     illegalBetPenaltyFactor: number | null;
     configWager: number;
@@ -25,9 +50,8 @@ export function liveRechargeMultiplier(user: {
 }
 
 /**
- * Recharge wager follows the live admin factor (penalty or Config.wager).
- * Snapshot at deposit is only a starting value — raising 1x → 3x must reopen
- * remaining need, or 3x users withdraw after betting principal once.
+ * Recharge wager follows Config.wager for balance-snapshot users, or the live
+ * legacy deposit penalty factor for LEGACY_DEPOSIT users.
  */
 export async function syncRechargeWagerToLiveFactor(
     userId: string,
@@ -55,13 +79,55 @@ export async function syncRechargeWagerToLiveFactor(
     `;
 }
 
+/** Clear every open PENALTY requirement for a user. */
+export async function clearOpenPenaltyRequirements(
+    userId: string,
+    db: Prisma.TransactionClient | typeof prisma = prisma
+) {
+    await db.$executeRaw`
+        UPDATE "WagerRequirement"
+        SET "isCleared" = true, "wagerCleared" = "requiredWager", "updatedAt" = NOW()
+        WHERE "userId" = ${userId}
+          AND "sourceType" = 'PENALTY'
+          AND "isCleared" = false
+    `;
+}
+
+/**
+ * Replace the open balance×factor PENALTY snapshot. Caller already holds the user lock.
+ */
+export async function replaceBalancePenaltySnapshot(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    balance: number,
+    factor: number,
+    sourceId?: string | null
+) {
+    await clearOpenPenaltyRequirements(userId, tx);
+    if (!(factor > 0) || balance <= LOW_BALANCE_WAGER_CLEAR) return null;
+    const requiredWager = Math.ceil(balance * factor);
+    if (requiredWager <= 0) return null;
+    return tx.wagerRequirement.create({
+        data: {
+            userId,
+            sourceType: "PENALTY",
+            sourceId: sourceId ?? null,
+            amount: balance,
+            multiplier: factor,
+            requiredWager,
+            wagerCleared: 0,
+            isCleared: false,
+        },
+    });
+}
+
 /**
  * Creates a wager requirement record for a deposit or reward claim.
  */
 export async function createWagerRequirement(
     tx: Prisma.TransactionClient | typeof prisma,
     userId: string,
-    sourceType: WagerCategory,
+    sourceType: Exclude<WagerCategory, "PENALTY">,
     amount: number,
     sourceId?: string
 ) {
@@ -72,12 +138,17 @@ export async function createWagerRequirement(
     if (sourceType === "RECHARGE") {
         const user = await tx.user.findUnique({
             where: { id: userId },
-            select: { hasIllegalBetPenalty: true, illegalBetPenaltyFactor: true },
+            select: {
+                hasIllegalBetPenalty: true,
+                illegalBetPenaltyFactor: true,
+                penaltyWagerModel: true,
+            },
         });
         const config = await SystemSettings.get();
         multiplier = liveRechargeMultiplier({
             hasIllegalBetPenalty: user?.hasIllegalBetPenalty ?? false,
             illegalBetPenaltyFactor: user?.illegalBetPenaltyFactor ?? null,
+            penaltyWagerModel: user?.penaltyWagerModel ?? "LEGACY_DEPOSIT",
             configWager: config?.wager ?? 1,
             configPenalty: config?.illegalBetPenaltyFactor ?? DEFAULT_PENALTY_FACTOR,
         });
@@ -103,9 +174,9 @@ export async function createWagerRequirement(
 }
 
 export interface UserWagerStatus {
-    /** Combined basic deposit and illegal-penalty recharge wager. */
+    /** Remaining RECHARGE need (legacy includes penalty uplift; snapshot model is base only). */
     depositWagerNeeded: number;
-    /** Illegal-penalty portion of depositWagerNeeded. */
+    /** Legacy: uplift inside RECHARGE. Snapshot: remaining PENALTY rows. */
     penaltyWagerNeeded: number;
     rewardWagerNeeded: number;
     totalNeedToBet: number;
@@ -122,6 +193,7 @@ export interface WagerUserSnapshot {
     balance: number;
     hasIllegalBetPenalty: boolean;
     illegalBetPenaltyFactor: number | null;
+    penaltyWagerModel?: PenaltyWagerModel | null;
 }
 
 interface WagerRequirementStatusRow {
@@ -143,6 +215,13 @@ const emptyWagerStatus = (): UserWagerStatus => ({
     isWithdrawalFrozen: false,
     activeRequirementsCount: 0,
 });
+
+const userSelect = {
+    balance: true,
+    hasIllegalBetPenalty: true,
+    illegalBetPenaltyFactor: true,
+    penaltyWagerModel: true,
+} as const;
 
 /**
  * Reads every first-party game table once, then calculates a reverse running
@@ -177,7 +256,7 @@ async function loadRequirementsWithBetTotals(
                           OR CEIL(wr."amount" * ${liveRechargeFactor}) > wr."requiredWager"
                       )
                   )
-                  OR (wr."sourceType" = 'REWARD' AND NOT wr."isCleared")
+                  OR (wr."sourceType" IN ('REWARD', 'PENALTY') AND NOT wr."isCleared")
               )
         ),
         bounds AS (
@@ -248,46 +327,13 @@ async function loadRequirementsWithBetTotals(
     `;
 }
 
-async function calculateUserWagerStatus(
-    userId: string,
-    user: WagerUserSnapshot | null,
-    config: WagerConfigSnapshot | null,
-    db: Prisma.TransactionClient | typeof prisma,
-    persist: boolean,
-    snapshotRows?: WagerRequirementStatusRow[]
-): Promise<UserWagerStatus> {
-    if (!user) return emptyWagerStatus();
-
-    if (user.balance <= LOW_BALANCE_WAGER_CLEAR) {
-        if (persist) {
-            await checkAndResetZeroBalanceWager(userId, user.balance, db);
-        }
-        return emptyWagerStatus();
-    }
-
-    const baseRechargeMultiplier = liveRechargeMultiplier({
-        hasIllegalBetPenalty: false,
-        illegalBetPenaltyFactor: null,
-        configWager: config?.wager ?? 1,
-    });
-    const liveRechargeFactor = liveRechargeMultiplier({
-        hasIllegalBetPenalty: user.hasIllegalBetPenalty,
-        illegalBetPenaltyFactor: user.illegalBetPenaltyFactor,
-        configWager: config?.wager ?? 1,
-        configPenalty: config?.illegalBetPenaltyFactor ?? DEFAULT_PENALTY_FACTOR,
-    });
-
-    if (persist) {
-        await syncRechargeWagerToLiveFactor(userId, liveRechargeFactor, db);
-    }
-
-    const requirements = snapshotRows ?? await loadRequirementsWithBetTotals(
-        userId,
-        liveRechargeFactor,
-        db
-    );
-    if (requirements.length === 0) return emptyWagerStatus();
-
+function summarizeRequirements(
+    requirements: WagerRequirementStatusRow[],
+    baseRechargeMultiplier: number,
+    balanceSnapshot: boolean
+): Omit<UserWagerStatus, "isWithdrawalFrozen" | "activeRequirementsCount"> & {
+    clearedIds: string[];
+} {
     let depositWagerNeeded = 0;
     let penaltyWagerNeeded = 0;
     let rewardWagerNeeded = 0;
@@ -310,50 +356,159 @@ async function calculateUserWagerStatus(
         timestampConsumedBets += requiredWager;
 
         if (availableBets >= requiredWager) {
-            if (persist) clearedIds.push(req.id);
+            clearedIds.push(req.id);
             continue;
         }
 
         const needed = Math.ceil(requiredWager - availableBets);
         if (req.sourceType === "RECHARGE") {
             depositWagerNeeded += needed;
-            const baseRequiredWager = Math.min(
-                requiredWager,
-                Math.ceil(Number(req.amount) * baseRechargeMultiplier)
-            );
-            const baseNeeded = Math.min(
-                needed,
-                Math.max(0, Math.ceil(baseRequiredWager - availableBets))
-            );
-            penaltyWagerNeeded += needed - baseNeeded;
+            if (!balanceSnapshot) {
+                const baseRequiredWager = Math.min(
+                    requiredWager,
+                    Math.ceil(Number(req.amount) * baseRechargeMultiplier)
+                );
+                const baseNeeded = Math.min(
+                    needed,
+                    Math.max(0, Math.ceil(baseRequiredWager - availableBets))
+                );
+                penaltyWagerNeeded += needed - baseNeeded;
+            }
+        } else if (req.sourceType === "PENALTY") {
+            penaltyWagerNeeded += needed;
         } else {
             rewardWagerNeeded += needed;
         }
     }
 
-    if (persist && clearedIds.length > 0) {
+    const totalNeedToBet = balanceSnapshot
+        ? depositWagerNeeded + rewardWagerNeeded + penaltyWagerNeeded
+        : depositWagerNeeded + rewardWagerNeeded;
+
+    return {
+        depositWagerNeeded,
+        penaltyWagerNeeded,
+        rewardWagerNeeded,
+        totalNeedToBet,
+        clearedIds,
+    };
+}
+
+async function calculateUserWagerStatus(
+    userId: string,
+    user: WagerUserSnapshot | null,
+    config: WagerConfigSnapshot | null,
+    db: Prisma.TransactionClient | typeof prisma,
+    persist: boolean,
+    snapshotRows?: WagerRequirementStatusRow[]
+): Promise<UserWagerStatus> {
+    if (!user) return emptyWagerStatus();
+
+    if (user.balance <= LOW_BALANCE_WAGER_CLEAR) {
+        if (persist) {
+            await checkAndResetZeroBalanceWager(userId, user.balance, db);
+        }
+        return emptyWagerStatus();
+    }
+
+    const balanceSnapshot = usesBalancePenalty(user.penaltyWagerModel);
+    const baseRechargeMultiplier = liveRechargeMultiplier({
+        hasIllegalBetPenalty: false,
+        illegalBetPenaltyFactor: null,
+        configWager: config?.wager ?? 1,
+    });
+    const liveRechargeFactor = liveRechargeMultiplier({
+        hasIllegalBetPenalty: user.hasIllegalBetPenalty,
+        illegalBetPenaltyFactor: user.illegalBetPenaltyFactor,
+        penaltyWagerModel: user.penaltyWagerModel,
+        configWager: config?.wager ?? 1,
+        configPenalty: config?.illegalBetPenaltyFactor ?? DEFAULT_PENALTY_FACTOR,
+    });
+
+    if (persist) {
+        await syncRechargeWagerToLiveFactor(userId, liveRechargeFactor, db);
+    }
+
+    const requirements = snapshotRows ?? await loadRequirementsWithBetTotals(
+        userId,
+        liveRechargeFactor,
+        db
+    );
+    if (requirements.length === 0) return emptyWagerStatus();
+
+    const summarized = summarizeRequirements(
+        requirements,
+        baseRechargeMultiplier,
+        balanceSnapshot
+    );
+
+    if (persist && summarized.clearedIds.length > 0) {
         await db.$executeRaw`
             UPDATE "WagerRequirement"
             SET
                 "isCleared" = true,
                 "wagerCleared" = "requiredWager",
                 "updatedAt" = NOW()
-            WHERE "id" IN (${Prisma.join(clearedIds)})
+            WHERE "id" IN (${Prisma.join(summarized.clearedIds)})
         `;
     }
 
-    const totalNeedToBet = depositWagerNeeded + rewardWagerNeeded;
     return {
-        depositWagerNeeded,
-        penaltyWagerNeeded,
-        rewardWagerNeeded,
-        totalNeedToBet,
-        isWithdrawalFrozen: totalNeedToBet > 0,
+        depositWagerNeeded: summarized.depositWagerNeeded,
+        penaltyWagerNeeded: summarized.penaltyWagerNeeded,
+        rewardWagerNeeded: summarized.rewardWagerNeeded,
+        totalNeedToBet: summarized.totalNeedToBet,
+        isWithdrawalFrozen: summarized.totalNeedToBet > 0,
         activeRequirementsCount: requirements.length,
     };
 }
 
-/** Compare factors against one immutable stake/requirement snapshot; no wager mutations. */
+function simulateSnapshotRows(
+    rows: WagerRequirementStatusRow[],
+    rechargeFactor: number,
+    next: {
+        hasIllegalBetPenalty: boolean;
+        illegalBetPenaltyFactor: number | null;
+        balance: number;
+        replacePenalty: boolean;
+    }
+): WagerRequirementStatusRow[] {
+    const withoutPenalty = rows.filter((row) => row.sourceType !== "PENALTY");
+    const mapped = withoutPenalty.map((row) => {
+        if (row.sourceType !== "RECHARGE") return row;
+        const effectiveRequiredWager = Math.ceil(row.amount * rechargeFactor);
+        return {
+            ...row,
+            effectiveRequiredWager,
+        };
+    }).filter((row) => !row.isCleared || (
+        row.sourceType === "RECHARGE" && row.effectiveRequiredWager > row.requiredWager
+    ));
+
+    if (next.replacePenalty && next.hasIllegalBetPenalty && next.illegalBetPenaltyFactor != null
+        && next.illegalBetPenaltyFactor > 0 && next.balance > LOW_BALANCE_WAGER_CLEAR) {
+        const requiredWager = Math.ceil(next.balance * next.illegalBetPenaltyFactor);
+        if (requiredWager > 0) {
+            mapped.push({
+                id: `virtual-penalty:${next.balance}:${next.illegalBetPenaltyFactor}`,
+                sourceType: "PENALTY",
+                amount: next.balance,
+                requiredWager,
+                effectiveRequiredWager: requiredWager,
+                createdAt: new Date(),
+                totalBetsSince: 0,
+                isCleared: false,
+            });
+        }
+    }
+    return mapped;
+}
+
+/**
+ * Compare penalty before/after against one immutable stake snapshot.
+ * New applications are simulated as BALANCE_SNAPSHOT (deposits at Config.wager +
+ * replaced wallet×factor PENALTY). Legacy-only reads still use deposit uplift.
+ */
 export async function comparePenaltyWager(
     db: Prisma.TransactionClient,
     userId: string,
@@ -361,24 +516,60 @@ export async function comparePenaltyWager(
     config: WagerConfigSnapshot | null,
     next: Pick<WagerUserSnapshot, "hasIllegalBetPenalty" | "illegalBetPenaltyFactor">
 ) {
-    const factor = (state: WagerUserSnapshot) => liveRechargeMultiplier({
-        ...state, configWager: config?.wager ?? 1,
+    const configWager = config?.wager ?? 1;
+    const previousFactor = displayPenaltyFactor({
+        ...user,
+        configWager,
         configPenalty: config?.illegalBetPenaltyFactor ?? DEFAULT_PENALTY_FACTOR,
     });
-    const nextUser = { ...user, ...next };
-    const previousFactor = factor(user);
-    const resultingFactor = factor(nextUser);
+    const resultingFactor = displayPenaltyFactor({
+        ...user,
+        ...next,
+        configWager,
+        configPenalty: config?.illegalBetPenaltyFactor ?? DEFAULT_PENALTY_FACTOR,
+    });
+
+    const beforeRecharge = liveRechargeMultiplier({
+        ...user,
+        configWager,
+        configPenalty: config?.illegalBetPenaltyFactor ?? DEFAULT_PENALTY_FACTOR,
+    });
+    const afterUser: WagerUserSnapshot = {
+        ...user,
+        ...next,
+        penaltyWagerModel: next.hasIllegalBetPenalty
+            ? "BALANCE_SNAPSHOT"
+            : user.penaltyWagerModel,
+    };
+    const afterRecharge = liveRechargeMultiplier({
+        ...afterUser,
+        configWager,
+        configPenalty: config?.illegalBetPenaltyFactor ?? DEFAULT_PENALTY_FACTOR,
+    });
+
     const rows = user.balance <= LOW_BALANCE_WAGER_CLEAR ? []
-        : await loadRequirementsWithBetTotals(userId, Math.max(previousFactor, resultingFactor), db);
-    const atFactor = (multiplier: number) => rows.map((row) => ({
-        ...row,
-        effectiveRequiredWager: row.sourceType === "RECHARGE"
-            ? Math.ceil(row.amount * multiplier) : row.requiredWager,
-    })).filter((row) => !row.isCleared || (
+        : await loadRequirementsWithBetTotals(
+            userId,
+            Math.max(beforeRecharge, afterRecharge, configWager),
+            db
+        );
+
+    const beforeRows = rows.map((row) => {
+        if (row.sourceType !== "RECHARGE") return row;
+        return { ...row, effectiveRequiredWager: Math.ceil(row.amount * beforeRecharge) };
+    }).filter((row) => !row.isCleared || (
         row.sourceType === "RECHARGE" && row.effectiveRequiredWager > row.requiredWager
     ));
-    const before = await calculateUserWagerStatus(userId, user, config, db, false, atFactor(previousFactor));
-    const after = await calculateUserWagerStatus(userId, nextUser, config, db, false, atFactor(resultingFactor));
+
+    const afterRows = simulateSnapshotRows(rows, afterRecharge, {
+        hasIllegalBetPenalty: next.hasIllegalBetPenalty,
+        illegalBetPenaltyFactor: next.illegalBetPenaltyFactor,
+        balance: user.balance,
+        replacePenalty: true,
+    });
+
+    const before = await calculateUserWagerStatus(userId, user, config, db, false, beforeRows);
+    const after = await calculateUserWagerStatus(userId, afterUser, config, db, false, afterRows);
     return { previousFactor, resultingFactor, before, after };
 }
 
@@ -386,7 +577,7 @@ export async function comparePenaltyWager(
  * Computes active wager requirements for a user, enforcing:
  * 1. Timestamp-based clearing (bets placed at/after item creation).
  * 2. First-party stake only (third-party Inout bets excluded).
- * 3. Categorized breakdown, including the illegal-penalty share of recharge wager.
+ * 3. Categorized breakdown, including illegal-penalty need.
  */
 export async function getUserWagerStatus(
     userId: string,
@@ -402,11 +593,7 @@ export async function getUserWagerStatus(
                 await db.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
                 const user = await db.user.findUnique({
                     where: { id: userId },
-                    select: {
-                        balance: true,
-                        hasIllegalBetPenalty: true,
-                        illegalBetPenaltyFactor: true,
-                    },
+                    select: userSelect,
                 });
                 return calculateUserWagerStatus(userId, user, config, db, true);
             },
@@ -418,11 +605,7 @@ export async function getUserWagerStatus(
         : configSnapshot;
     const user = await tx.user.findUnique({
         where: { id: userId },
-        select: {
-            balance: true,
-            hasIllegalBetPenalty: true,
-            illegalBetPenaltyFactor: true,
-        },
+        select: userSelect,
     });
 
     return calculateUserWagerStatus(userId, user, config, tx, true);
@@ -438,11 +621,7 @@ export async function getUserWagerStatusReadOnly(
         userSnapshot === undefined
             ? prisma.user.findUnique({
                   where: { id: userId },
-                  select: {
-                      balance: true,
-                      hasIllegalBetPenalty: true,
-                      illegalBetPenaltyFactor: true,
-                  },
+                  select: userSelect,
               })
             : Promise.resolve(userSnapshot),
         configSnapshot === undefined
@@ -453,7 +632,7 @@ export async function getUserWagerStatusReadOnly(
 }
 
 /**
- * Clears every open wager (RECHARGE + REWARD) when wallet is ≤ ₹5.
+ * Clears every open wager (RECHARGE + REWARD + PENALTY) when wallet is ≤ ₹5.
  * Leftover rupees stay; withdraw is allowed; next recharge starts a new row.
  */
 export async function checkAndResetZeroBalanceWager(

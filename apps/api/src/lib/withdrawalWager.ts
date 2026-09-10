@@ -1,5 +1,6 @@
 import { Prisma } from "@bcwin/db";
 import {
+    clearOpenPenaltyRequirements,
     getUserWagerStatus,
     type WagerConfigSnapshot,
 } from "./wagerEngine";
@@ -35,12 +36,14 @@ export async function debitWithdrawal(
             );
         }
     }
+    await clearOpenPenaltyRequirements(userId, tx);
     return tx.user.update({
         where: { id: userId },
         data: {
             balance: { decrement: amount },
             hasIllegalBetPenalty: false,
             illegalBetPenaltyFactor: null,
+            penaltyWagerModel: "LEGACY_DEPOSIT",
         },
         select: { balance: true },
     });

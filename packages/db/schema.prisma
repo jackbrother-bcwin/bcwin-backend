@@ -18,6 +18,8 @@ model User {
     isBanned               Boolean   @default(false)
     hasIllegalBetPenalty   Boolean   @default(false)
     illegalBetPenaltyFactor Float?
+    /// LEGACY_DEPOSIT keeps live RECHARGE uplift; BALANCE_SNAPSHOT uses a frozen PENALTY row.
+    penaltyWagerModel       PenaltyWagerModel @default(LEGACY_DEPOSIT)
     zeroWagerEnabled        Boolean   @default(false)
     zeroWagerConsumedAt     DateTime?
     isDemo                 Boolean   @default(false)
@@ -1415,9 +1417,15 @@ model LuckySpinReward {
     @@index([kind, isActive])
 }
 
+enum PenaltyWagerModel {
+    LEGACY_DEPOSIT
+    BALANCE_SNAPSHOT
+}
+
 enum WagerRequirementType {
     RECHARGE
     REWARD
+    PENALTY
 }
 
 model WagerRequirement {

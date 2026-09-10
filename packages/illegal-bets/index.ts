@@ -2,7 +2,13 @@ import { prisma, type Prisma } from "@bcwin/db";
 import { Cache, CacheKey } from "@bcwin/cache";
 import Logger from "@bcwin/logger";
 import { findFullNumberCoverage, isIllegalBetPair, type IllegalBetGame, type IllegalBetInput } from "./rules";
-import { comparePenaltyWager, WAGER_TRANSACTION_TIMEOUT_MS } from "@bcwin/wager";
+import {
+    comparePenaltyWager,
+    liveRechargeMultiplier,
+    replaceBalancePenaltySnapshot,
+    syncRechargeWagerToLiveFactor,
+    WAGER_TRANSACTION_TIMEOUT_MS,
+} from "@bcwin/wager";
 import { penaltyHistoryAmounts, roundPeriodNumber } from "@bcwin/wager/penaltyHistory";
 
 export type { IllegalBetGame } from "./rules";
@@ -60,14 +66,9 @@ export async function applyIllegalRoundPenalty(
     const current = user.hasIllegalBetPenalty ? (user.illegalBetPenaltyFactor ?? base) : 1;
     // Keep the Float-backed multiplier within exact integer representation.
     const factor = Math.min(Number.MAX_SAFE_INTEGER, current * base);
-    const comparison = await comparePenaltyWager(tx, first.userId, user, config, {
-        hasIllegalBetPenalty: true, illegalBetPenaltyFactor: factor,
-    });
-    await tx.user.update({
-        where: { id: first.userId },
-        data: { hasIllegalBetPenalty: true, illegalBetPenaltyFactor: factor },
-    });
-    await tx.penaltyHistoryEvent.create({ data: {
+    const next = { hasIllegalBetPenalty: true as const, illegalBetPenaltyFactor: factor };
+    const comparison = await comparePenaltyWager(tx, first.userId, user, config, next);
+    const history = await tx.penaltyHistoryEvent.create({ data: {
         userId: first.userId,
         eventKey: roundPrefix,
         action: "APPLIED",
@@ -83,6 +84,26 @@ export async function applyIllegalRoundPenalty(
         ...penaltyHistoryAmounts(comparison.previousFactor, comparison.resultingFactor,
             comparison.before, comparison.after),
     } });
+    await tx.user.update({
+        where: { id: first.userId },
+        data: {
+            hasIllegalBetPenalty: true,
+            illegalBetPenaltyFactor: factor,
+            penaltyWagerModel: "BALANCE_SNAPSHOT",
+        },
+    });
+    await syncRechargeWagerToLiveFactor(
+        first.userId,
+        liveRechargeMultiplier({
+            hasIllegalBetPenalty: true,
+            illegalBetPenaltyFactor: factor,
+            penaltyWagerModel: "BALANCE_SNAPSHOT",
+            configWager: config?.wager ?? 1,
+            configPenalty: config?.illegalBetPenaltyFactor,
+        }),
+        tx
+    );
+    await replaceBalancePenaltySnapshot(tx, first.userId, user.balance, factor, history.id);
     return true;
 }
 

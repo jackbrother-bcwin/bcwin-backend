@@ -44,12 +44,17 @@ describe("User illegal activity history", () => {
         expect((await place(cookie, period.id, "BIG", 100)).status).toBe(201);
         expect((await place(cookie, period.id, "SMALL", 40)).status).toBe(201);
         const event = await prisma.penaltyHistoryEvent.findFirstOrThrow({ where: { userId: user.id } });
+        const afterBalance = 10_000 - 140;
+        const depositLeft = Math.max(0, Math.ceil(1_000 * baseFactor - 140));
         expect(event.previousFactor).toBe(baseFactor);
         expect(event.resultingFactor).toBe(penaltyFactor);
-        expect(event.beforeNeedToBet).toBe(Math.max(0, Math.ceil(1_000 * baseFactor - 140)));
-        expect(event.afterNeedToBet).toBe(Math.max(0, Math.ceil(1_000 * penaltyFactor - 140)));
+        expect(event.beforeNeedToBet).toBe(depositLeft);
+        expect(event.afterNeedToBet).toBe(depositLeft + Math.ceil(afterBalance * penaltyFactor));
         expect((event.evidence as Array<{ amount: number }>).map((b) => b.amount).sort((a, b) => a - b)).toEqual([40, 100]);
         expect(event.periodNumber).toBe(period.periodNumber);
+        expect(await prisma.wagerRequirement.count({
+            where: { userId: user.id, sourceType: "PENALTY", isCleared: false },
+        })).toBe(1);
         expect((await place(cookie, period.id, "BIG", 20)).status).toBe(201);
         const bets = await prisma.wingoBet.findMany({ where: { userId: user.id } });
         await detectSettledIllegalBets("WINGO", bets);
@@ -59,7 +64,10 @@ describe("User illegal activity history", () => {
         expect(response.headers.get("cache-control")).toBe("private, no-store");
         expect(response.json.total).toBe(1);
         expect(response.json.items[0].afterNeedToBet).toBe(event.afterNeedToBet);
-        expect(response.json.current.totalNeedToBet).toBe(Math.max(0, Math.ceil(1_000 * penaltyFactor - 160)));
+        const depositAfter = Math.max(0, Math.ceil(1_000 * baseFactor - 160));
+        const penaltyAfter = Math.max(0, Math.ceil(afterBalance * penaltyFactor - 20));
+        expect(response.json.current.totalNeedToBet).toBe(depositAfter + penaltyAfter);
+        expect(response.json.current.penaltyWagerNeeded).toBe(penaltyAfter);
     });
 
     test("manual same-IP, adjustment, no-op, and clearance preserve immutable application amounts", async () => {
@@ -71,7 +79,12 @@ describe("User illegal activity history", () => {
         const response = await history(cookie);
         expect(response.status).toBe(200);
         expect(response.json.items.map((e: { action: string }) => e.action)).toEqual(["CLEARED", "ADJUSTED", "APPLIED"]);
-        expect(response.json.items[2]).toMatchObject({ reason: "SAME_IP", afterNeedToBet: 5_000, resultingFactor: 5, evidence: [] });
+        expect(response.json.items[2]).toMatchObject({
+            reason: "SAME_IP",
+            afterNeedToBet: Math.ceil(1_000 * baseFactor) + 10_000 * 5,
+            resultingFactor: 5,
+            evidence: [],
+        });
         expect(response.json.current.penaltyWagerNeeded).toBe(0);
         expect(response.json.current.totalNeedToBet).toBe(Math.ceil(1_000 * baseFactor));
         expect((await history(cookie, "?reason=SAME_IP")).json.total).toBe(1);
@@ -93,12 +106,12 @@ describe("User illegal activity history", () => {
         expect(response.json.total).toBe(2);
         expect(response.json.items[0]).toMatchObject({
             action: "EXTRA_WAGERS_CLEARED", beforeRewardWager: 400, afterRewardWager: 0,
-            beforeNeedToBet: 5_400, afterNeedToBet: Math.ceil(1_000 * baseFactor),
+            beforeNeedToBet: Math.ceil(1_000 * baseFactor) + 10_000 * 5 + 400,
+            afterNeedToBet: Math.ceil(1_000 * baseFactor),
         });
         expect(JSON.stringify(response.json)).not.toContain("PRIVATE ADMIN");
         expect(JSON.stringify(response.json)).not.toContain("clearedById");
     });
-
     test("legacy grouped and unkeyed evidence keeps unknown amounts null and hides private clearance notes", async () => {
         const { user, cookie } = await fixture();
         const prefix = `WINGO:${crypto.randomUUID()}:${user.id}:`;
@@ -175,11 +188,22 @@ describe("User illegal activity history", () => {
         } });
         const config = { wager: 1, illegalBetPenaltyFactor: 3 };
         for (const beforeFactor of [1, 3, 5]) for (const afterFactor of [1, 3, 5]) {
-            const previous = { ...user, hasIllegalBetPenalty: beforeFactor !== 1, illegalBetPenaltyFactor: beforeFactor };
+            const previous = {
+                ...user,
+                hasIllegalBetPenalty: beforeFactor !== 1,
+                illegalBetPenaltyFactor: beforeFactor,
+                penaltyWagerModel: "LEGACY_DEPOSIT" as const,
+            };
             const next = { hasIllegalBetPenalty: afterFactor !== 1, illegalBetPenaltyFactor: afterFactor };
             const comparison = await prisma.$transaction((tx) => comparePenaltyWager(tx, user.id, previous, config, next));
             expect(comparison.before).toEqual(await getUserWagerStatusReadOnly(user.id, previous, config));
-            expect(comparison.after).toEqual(await getUserWagerStatusReadOnly(user.id, { ...previous, ...next }, config));
+            // After always simulates the new balance×factor model (virtual PENALTY row).
+            if (!next.hasIllegalBetPenalty) {
+                expect(comparison.after.penaltyWagerNeeded).toBe(0);
+            } else {
+                expect(comparison.after.penaltyWagerNeeded).toBe(Math.ceil(user.balance * afterFactor));
+                expect(comparison.after.depositWagerNeeded).toBe(0); // 1200 stake cleared the ₹1000 deposit at 1x
+            }
         }
     });
 
@@ -192,11 +216,14 @@ describe("User illegal activity history", () => {
         ]);
         expect(results.map((r) => r.status)).toEqual([201, 200]);
         const events = await prisma.penaltyHistoryEvent.findMany({
-            where: { userId: user.id }, orderBy: { createdAt: "asc" },
+            where: { userId: user.id }, orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         });
         expect(events).toHaveLength(2);
         expect(events[0].previousFactor).toBe(baseFactor);
         expect(events[1].previousFactor).toBe(events[0].resultingFactor);
+        expect(await prisma.wagerRequirement.count({
+            where: { userId: user.id, sourceType: "PENALTY", isCleared: false },
+        })).toBe(1);
         const current = await getUserWagerStatusReadOnly(user.id);
         expect(current.totalNeedToBet).toBe(events[1].afterNeedToBet);
     });
@@ -210,10 +237,9 @@ describe("User illegal activity history", () => {
         const snapshot = await history(cookie, `?asOf=${encodeURIComponent(first.json.asOf)}`);
         expect(snapshot.json.total).toBe(1);
         expect(snapshot.json.items[0].resultingFactor).toBe(3);
-        expect(snapshot.json.current.totalNeedToBet).toBe(5_000);
+        expect(snapshot.json.current.totalNeedToBet).toBe(Math.ceil(1_000 * baseFactor) + 10_000 * 5);
         expect((await history(cookie)).json.total).toBe(2);
     });
-
     test("full-number coverage records individual stakes in one application", async () => {
         const { user } = await fixture();
         const period = await createActiveWingoPeriod(tracker, 300);
@@ -244,9 +270,11 @@ describe("User illegal activity history", () => {
         const elapsed = performance.now() - started;
         console.info(`Penalty snapshot with 5000 bets: ${Math.round(elapsed)}ms`);
         expect(elapsed).toBeLessThan(5_000);
-        expect(comparison.after.totalNeedToBet).toBe(4_000);
+        // Deposit fully cleared by 5000 stake; penalty is balance×9 with no bets after the virtual row.
+        expect(comparison.after.depositWagerNeeded).toBe(0);
+        expect(comparison.after.penaltyWagerNeeded).toBe(Math.ceil(user.balance * 9));
+        expect(comparison.after.totalNeedToBet).toBe(Math.ceil(user.balance * 9));
     });
-
     test("penalty application and its history roll back together", async () => {
         const { user } = await fixture();
         const period = await createActiveWingoPeriod(tracker, 300);
