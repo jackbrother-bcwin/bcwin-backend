@@ -15,6 +15,7 @@ import { gameHistoryRoutes } from "./gameHistory";
 import { userQueriesRoutes } from "./queries";
 import { userNotificationRoutes } from "./notifications";
 import { userSalaryRoutes } from "./salary";
+import { illegalActivityRoutes } from "./illegalActivity";
 
 export const userRoutes = (app: OpenAPIHono) => {
     const userApp = new OpenAPIHono({ defaultHook: zodErrorHook });
@@ -30,6 +31,7 @@ export const userRoutes = (app: OpenAPIHono) => {
     userQueriesRoutes(userApp);
     userNotificationRoutes(userApp);
     userSalaryRoutes(userApp);
+    illegalActivityRoutes(userApp);
 
     app.route("/user", userApp);
 };

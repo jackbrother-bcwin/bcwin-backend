@@ -50,10 +50,12 @@ function isStaleClient(client: PrismaClient | undefined): boolean {
     const c = client as unknown as {
         selfRebate?: unknown;
         selfRebateRateConfig?: unknown;
+        penaltyHistoryEvent?: unknown;
     };
     return (
         typeof c.selfRebate === "undefined" ||
-        typeof c.selfRebateRateConfig === "undefined"
+        typeof c.selfRebateRateConfig === "undefined" ||
+        typeof c.penaltyHistoryEvent === "undefined"
     );
 }
 

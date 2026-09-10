@@ -1,4 +1,5 @@
 import { createRoute, OpenAPIHono, z } from "@hono/zod-openapi";
+import { penaltyHistoryAmounts } from "@bcwin/wager/penaltyHistory";
 import { prisma } from "@bcwin/db";
 import { SystemSettings } from "@bcwin/config";
 import { Cache, CacheKey } from "@bcwin/cache";
@@ -115,7 +116,7 @@ export const clearWagerRoutes = (app: OpenAPIHono) => {
                     };
                     const clearedAt = new Date();
 
-                    await tx.wagerClearEvent.create({
+                    const clearEvent = await tx.wagerClearEvent.create({
                         data: {
                             userId: id,
                             clearedById: admin.id,
@@ -131,6 +132,13 @@ export const clearWagerRoutes = (app: OpenAPIHono) => {
                             createdAt: clearedAt,
                         },
                     });
+
+                    await tx.penaltyHistoryEvent.create({ data: {
+                        userId: id, eventKey: `clear:${clearEvent.id}`,
+                        action: "EXTRA_WAGERS_CLEARED", reason: "ADMIN",
+                        ...penaltyHistoryAmounts(before.multiplier, after.multiplier, beforeStatus, afterStatus),
+                        createdAt: clearedAt,
+                    } });
 
                     return {
                         before,

@@ -1,4 +1,5 @@
 import { detectPlacedIllegalBet, invalidatePenaltyCache } from "@bcwin/illegal-bets";
+import { WAGER_TRANSACTION_TIMEOUT_MS } from "@bcwin/wager";
 import { OpenAPIHono, z } from "@hono/zod-openapi";
 import { createRoute } from "@hono/zod-openapi";
 
@@ -251,7 +252,8 @@ export const betRoutes = (app: OpenAPIHono) => {
 
                     const penaltyChanged = await detectPlacedIllegalBet(tx, "K3", result);
                     return { result, updatedUser, penaltyChanged };
-                }
+                },
+                { timeout: WAGER_TRANSACTION_TIMEOUT_MS }
             );
 
             if (penaltyChanged) await invalidatePenaltyCache(user.id);

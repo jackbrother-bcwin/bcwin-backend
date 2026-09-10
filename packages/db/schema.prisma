@@ -42,6 +42,7 @@ model User {
     trxwingoBets                     TrxWingoBet[]
     InoutBets                        InoutBet[]
     illegalBets                      IllegalBet[]
+    penaltyHistory                  PenaltyHistoryEvent[]
     ipActivities                     IpActivity[]
     rebates                          Rebate[]              @relation("RebateReceiver")
     rebatesFrom                      Rebate[]              @relation("RebateFrom")
@@ -509,6 +510,29 @@ model IllegalBet {
 
     @@index([userId])
     @@index([createdAt])
+}
+
+model PenaltyHistoryEvent {
+    id                   String   @id @default(uuid())
+    userId               String
+    user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    eventKey             String?  @unique
+    action               String
+    reason               String
+    game                 String?
+    periodNumber         String?
+    evidence             Json?
+    previousFactor       Float
+    resultingFactor      Float
+    beforeNeedToBet       Float
+    afterNeedToBet        Float
+    beforePenaltyWager   Float
+    afterPenaltyWager    Float
+    beforeRewardWager    Float
+    afterRewardWager     Float
+    createdAt            DateTime @default(now())
+
+    @@index([userId, createdAt, id])
 }
 
 model AdminBalanceUpdateTransaction {

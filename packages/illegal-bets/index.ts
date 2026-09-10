@@ -1,9 +1,13 @@
 import { prisma, type Prisma } from "@bcwin/db";
 import { Cache, CacheKey } from "@bcwin/cache";
+import Logger from "@bcwin/logger";
 import { findFullNumberCoverage, isIllegalBetPair, type IllegalBetGame, type IllegalBetInput } from "./rules";
+import { comparePenaltyWager, WAGER_TRANSACTION_TIMEOUT_MS } from "@bcwin/wager";
+import { penaltyHistoryAmounts, roundPeriodNumber } from "@bcwin/wager/penaltyHistory";
 
 export type { IllegalBetGame } from "./rules";
 type Bet = IllegalBetInput;
+const logger = new Logger("illegal-bets");
 
 /** The caller holds the user's row lock, including when called during placement. */
 export async function applyIllegalRoundPenalty(
@@ -15,11 +19,14 @@ export async function applyIllegalRoundPenalty(
     if (!first || bets.length < 2) return false;
     const roundPrefix = `${game}:${first.periodId}:${first.userId}:`;
     const records: Prisma.IllegalBetCreateManyInput[] = [];
+    const triggeringBets = new Map<string, Bet>();
     for (let i = 0; i < bets.length; i++) {
         const a = bets[i];
         for (let j = i + 1; j < bets.length; j++) {
             const b = bets[j];
             if (!isIllegalBetPair(game, a, b)) continue;
+            triggeringBets.set(a.id, a);
+            triggeringBets.set(b.id, b);
             records.push({
                 userId: first.userId, betAmount: a.betAmount, betGame: game,
                 betType: `${a.betChoice}_${b.betChoice}`,
@@ -28,6 +35,7 @@ export async function applyIllegalRoundPenalty(
         }
     }
     for (const coverage of findFullNumberCoverage(game, bets)) {
+        for (const bet of coverage.bets) triggeringBets.set(bet.id, bet);
         records.push({
             userId: first.userId, betAmount: coverage.bets[0].betAmount, betGame: game,
             betType: `${coverage.scope}_ALL_NUMBERS`,
@@ -52,10 +60,29 @@ export async function applyIllegalRoundPenalty(
     const current = user.hasIllegalBetPenalty ? (user.illegalBetPenaltyFactor ?? base) : 1;
     // Keep the Float-backed multiplier within exact integer representation.
     const factor = Math.min(Number.MAX_SAFE_INTEGER, current * base);
+    const comparison = await comparePenaltyWager(tx, first.userId, user, config, {
+        hasIllegalBetPenalty: true, illegalBetPenaltyFactor: factor,
+    });
     await tx.user.update({
         where: { id: first.userId },
         data: { hasIllegalBetPenalty: true, illegalBetPenaltyFactor: factor },
     });
+    await tx.penaltyHistoryEvent.create({ data: {
+        userId: first.userId,
+        eventKey: roundPrefix,
+        action: "APPLIED",
+        createdAt: new Date(),
+        reason: "ILLEGAL_BETS",
+        game,
+        periodNumber: await roundPeriodNumber(tx, game, first.periodId),
+        evidence: [...triggeringBets.values()].map((bet) => ({
+            id: bet.id, selection: bet.betChoice, betType: bet.betType,
+            amount: bet.betAmount,
+            scope: bet.position ?? bet.targetPosition ?? bet.betCategory ?? null,
+        })),
+        ...penaltyHistoryAmounts(comparison.previousFactor, comparison.resultingFactor,
+            comparison.before, comparison.after),
+    } });
     return true;
 }
 
@@ -92,12 +119,18 @@ export async function detectSettledIllegalBets(game: IllegalBetGame, bets: Bet[]
         group.push(bet);
         groups.set(key, group);
     }
+    // Isolate each user/round so one snapshot/DB failure cannot abort the whole settle tick.
     for (const group of groups.values()) {
         const userId = group[0].userId;
-        const changed = await prisma.$transaction(async (tx) => {
-            await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
-            return applyIllegalRoundPenalty(tx, game, group);
-        });
-        if (changed) await invalidatePenaltyCache(userId);
+        const periodId = group[0].periodId;
+        try {
+            const changed = await prisma.$transaction(async (tx) => {
+                await tx.$queryRaw`SELECT "id" FROM "User" WHERE "id" = ${userId} FOR UPDATE`;
+                return applyIllegalRoundPenalty(tx, game, group);
+            }, { timeout: WAGER_TRANSACTION_TIMEOUT_MS });
+            if (changed) await invalidatePenaltyCache(userId);
+        } catch (error) {
+            logger.error(`Settlement penalty failed for ${game} user=${userId} period=${periodId}`, error);
+        }
     }
 }
