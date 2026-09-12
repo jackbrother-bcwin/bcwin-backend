@@ -62,9 +62,27 @@ Covers: real place-bet on all first-party games → async team + self accrual �
 user/admin rebate endpoints → self claim → `RebateScheduler` 01:30 settle →
 `SelfRebateScheduler` 01:00 expiry → balances + team overview.
 
+## Activity bonus expiry regression
+
+`tests/api/activity-expiration.test.ts` checks the claim and scheduler policy with database methods mocked.
+`tests/api/activity-expiration.deep.test.ts` exercises real reward creation, legacy deadlines,
+the data migration, authenticated claims, concurrent claims, wallet/wager updates, and rollback.
+
+The deep file is opt-in because the migration and expiry sweep affect all matching rows.
+It requires a disposable **local database named `bcwin_expiry_test`**, with migrations applied,
+and a disposable Redis instance. For example, with Postgres on 15432 and Redis on 16379:
+
+```sh
+DATABASE_URL=postgresql://test:test@127.0.0.1:15432/bcwin_expiry_test \
+REDIS_URL=redis://127.0.0.1:16379 \
+ACTIVITY_EXPIRY_DEEP_TEST=1 \
+bun test --preload ./tests/helpers/preload.ts \
+  tests/api/activity-expiration.test.ts tests/api/activity-expiration.deep.test.ts
+```
+
 ## Data cleanup
 
-Every suite uses `FixtureTracker` and **`afterAll` → `cleanupByUserIds`**:
+Most integration suites use `FixtureTracker` and **`afterAll` → `cleanupByUserIds`**:
 
 - All users created in that suite
 - Periods with `periodNumber` prefix `DT_…`

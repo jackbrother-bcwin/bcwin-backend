@@ -1,6 +1,8 @@
 import { prisma } from "@bcwin/db";
 import Logger from "@bcwin/logger";
 import { SystemSettings } from "@bcwin/config";
+import { calculateExpirationDate, NON_EXPIRING_BONUS_TYPES } from "./expiration";
+export { EXPIRATION_DAYS } from "./expiration";
 
 const logger = new Logger("activity-bonus-service");
 
@@ -86,15 +88,6 @@ export const FALLBACK_ATTENDANCE_TIERS = [
     { day: 6, accumulatedDeposit: 3000, reward: 38 },
     { day: 7, accumulatedDeposit: 5000, reward: 58 },
 ];
-
-// Expiration durations in days
-export const EXPIRATION_DAYS = {
-    DAILY: 1,
-    ATTENDENCE: 1, // Note: ATTENDENCE matches the enum typo in schema
-    WEEKLY: 7,
-    INVITATION: 7,
-    FIRST_DEPOSIT: 7,
-};
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -243,15 +236,6 @@ async function bonusTierExists(
     });
 
     return !!existing;
-}
-
-/**
- * Calculate expiration date based on bonus type
- */
-function calculateExpirationDate(type: string): Date {
-    const now = new Date();
-    const days = EXPIRATION_DAYS[type as keyof typeof EXPIRATION_DAYS] || 7;
-    return new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
 }
 
 // ============================================================================
@@ -868,6 +852,7 @@ export async function expireOldBonuses(): Promise<void> {
         const result = await prisma.activityBonus.updateMany({
             where: {
                 status: "COMPLETED_UNCOLLECTED",
+                type: { notIn: [...NON_EXPIRING_BONUS_TYPES] },
                 expiresAt: {
                     lt: now,
                 },

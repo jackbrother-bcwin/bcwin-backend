@@ -10,6 +10,7 @@ import { claimBonusResponseSchema } from "@/schemas/activity";
 import { z } from "@hono/zod-openapi";
 import { WebSocketManager } from "@bcwin/websocket";
 import { createWagerRequirement } from "@/lib/wagerEngine";
+import { isNonExpiringBonus } from "@bcwin/activity-bonus/expiration";
 
 const logger = new Logger("activity-claim");
 
@@ -87,10 +88,10 @@ export const activityClaimRoutes = (app: OpenAPIHono) => {
             }
 
             // Verify not expired
-            if (bonus.expiresAt && bonus.expiresAt < new Date()) {
+            if (!isNonExpiringBonus(bonus.type) && bonus.expiresAt && bonus.expiresAt < new Date()) {
                 // Mark as expired
-                await prisma.activityBonus.update({
-                    where: { id: bonusId },
+                await prisma.activityBonus.updateMany({
+                    where: { id: bonusId, status: "COMPLETED_UNCOLLECTED" },
                     data: { status: "EXPIRED" },
                 });
 
@@ -103,6 +104,26 @@ export const activityClaimRoutes = (app: OpenAPIHono) => {
 
             // Claim bonus in transaction
             const result = await prisma.$transaction(async (tx) => {
+                // Reserve the reward before crediting it. Concurrent requests must
+                // recheck its status after waiting for the row lock.
+                const claimAt = new Date();
+                const claimed = await tx.activityBonus.updateMany({
+                    where: {
+                        id: bonusId,
+                        userId: user.id,
+                        status: "COMPLETED_UNCOLLECTED",
+                        ...(!isNonExpiringBonus(bonus.type) ? {
+                            OR: [{ expiresAt: null }, { expiresAt: { gte: claimAt } }],
+                        } : {}),
+                    },
+                    data: {
+                        status: "COLLECTED",
+                        claimAt,
+                        ...(isNonExpiringBonus(bonus.type) ? { expiresAt: null } : {}),
+                    },
+                });
+                if (claimed.count !== 1) return null;
+
                 // Update user balance
                 const updatedUser = await tx.user.update({
                     where: { id: user.id },
@@ -110,19 +131,18 @@ export const activityClaimRoutes = (app: OpenAPIHono) => {
                     select: { balance: true },
                 });
 
-                // Update bonus status
-                const updatedBonus = await tx.activityBonus.update({
+                const updatedBonus = await tx.activityBonus.findUniqueOrThrow({
                     where: { id: bonusId },
-                    data: {
-                        status: "COLLECTED",
-                        claimAt: new Date(),
-                    },
                 });
 
                 await createWagerRequirement(tx, user.id, "REWARD", bonus.amount, bonusId);
 
                 return { updatedUser, updatedBonus };
             });
+
+            if (!result) {
+                return apiError(c, "Bonus is no longer available to claim", HTTP_STATUS.BAD_REQUEST);
+            }
 
             // Publish balance update via WebSocket
             WebSocketManager.publishToUser(user.id, "account-balance", {
