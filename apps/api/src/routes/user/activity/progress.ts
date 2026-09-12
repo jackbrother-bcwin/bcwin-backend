@@ -16,7 +16,8 @@ import {
     FALLBACK_ATTENDANCE_TIERS,
     getTotalUserSlotBetsInRange,
     getUserTotalDeposits,
-    getUserInvitedUsersWithDeposits,
+    getUserInvitedDepositTotals,
+    checkAndCreateInvitationBonuses,
     recordDailyLogin,
 } from "@bcwin/activity-bonus";
 
@@ -52,7 +53,10 @@ export const activityProgressRoutes = (app: OpenAPIHono) => {
             const user = c.get("user");
 
             // Keep attendance streak current for long-lived sessions (same-day no-op)
-            await recordDailyLogin(user.id);
+            await Promise.all([
+                recordDailyLogin(user.id),
+                checkAndCreateInvitationBonuses(user.id),
+            ]);
 
             // Calculate date ranges
             const now = new Date();
@@ -211,16 +215,11 @@ export const activityProgressRoutes = (app: OpenAPIHono) => {
                 };
             });
 
-            // Process invitation tiers (fetch counts in parallel)
-            const invitationCounts = await Promise.all(
-                invitationTiers.map((tier) =>
-                    getUserInvitedUsersWithDeposits(user.id, tier.minDeposit)
-                )
-            );
+            const invitationDeposits = await getUserInvitedDepositTotals(user.id);
 
             const invitationProgress = invitationTiers.map((tier, index) => {
                 const status = getTierStatus("INVITATION", index);
-                const qualifyingInvites = invitationCounts[index];
+                const qualifyingInvites = invitationDeposits.filter((total) => total >= tier.minDeposit).length;
 
                 return {
                     tier: index,

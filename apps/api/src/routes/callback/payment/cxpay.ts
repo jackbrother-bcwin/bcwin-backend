@@ -11,6 +11,7 @@ import { Cxpay } from "@/lib/payment";
 import {
     checkAndCreateFirstDepositBonus,
     checkAndCreateDailyBonuses,
+    checkAndCreateReferrerInvitationBonuses,
     creditRechargeBonus,
 } from "@bcwin/activity-bonus";
 import * as Config from "@bcwin/config";
@@ -166,6 +167,7 @@ export const cxpayCallbackRoutes = (app: OpenAPIHono) => {
                     principalInr
                 );
                 checkAndCreateDailyBonuses(updatedDeposit.userId);
+                await checkAndCreateReferrerInvitationBonuses(updatedDeposit.userId);
             } else if (data.status == 0) {
                 await prisma.deposit.update({
                     where: {

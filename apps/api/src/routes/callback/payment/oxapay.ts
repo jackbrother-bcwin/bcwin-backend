@@ -10,6 +10,7 @@ import { Oxapay } from "@/lib/payment";
 import {
     checkAndCreateFirstDepositBonus,
     checkAndCreateDailyBonuses,
+    checkAndCreateReferrerInvitationBonuses,
     creditRechargeBonus,
 } from "@bcwin/activity-bonus";
 import * as Config from "@bcwin/config";
@@ -192,6 +193,7 @@ export const oxapayCallbackRoutes = (app: OpenAPIHono) => {
                     principalInr
                 );
                 checkAndCreateDailyBonuses(updatedDeposit.userId);
+                await checkAndCreateReferrerInvitationBonuses(updatedDeposit.userId);
             } else if (statusVal === "paying" || statusVal === "waiting") {
                 await prisma.deposit.update({
                     where: {

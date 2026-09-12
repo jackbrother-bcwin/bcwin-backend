@@ -134,6 +134,9 @@ interface BroadcastMessageMap {
 }
 
 interface DirectMessageMap {
+    "invitation-bonus-update": {
+        createdCount: number;
+    };
     "account-balance": {
         balance: number;
     };
@@ -161,6 +164,7 @@ type BroadcastMessage = {
 // }[keyof DirectMessageMap];
 
 const TOPICS = [
+    "invitation-bonus-update",
     "account-balance",
     "bet-settlement",
     "wingo-period-creation",
@@ -182,7 +186,7 @@ const TOPICS = [
 type Topic = (typeof TOPICS)[number];
 
 // these require user to be authenticated
-const PROTECTED_TOPICS: Topic[] = ["account-balance", "bet-settlement"];
+const PROTECTED_TOPICS: Topic[] = ["account-balance", "bet-settlement", "invitation-bonus-update"];
 // these require user to be authenticated and have admin role
 const ADMIN_PROTECTED_TOPICS: Topic[] = [
     "admin-wingo-bets",
@@ -192,7 +196,7 @@ const ADMIN_PROTECTED_TOPICS: Topic[] = [
     "admin-trx-wingo-bets",
 ];
 
-const DIRECT_TOPICS: Topic[] = ["account-balance", "bet-settlement"];
+const DIRECT_TOPICS: Topic[] = ["account-balance", "bet-settlement", "invitation-bonus-update"];
 
 export class WebSocketManager {
     // --- Constants ---
@@ -476,12 +480,9 @@ export class WebSocketManager {
             // If the topic is user-specific (direct topic), we should create a dynamic topic name
             let finalTopic: string = topic;
             if (DIRECT_TOPICS.includes(topic)) {
-                const user = this.clientAuth.get(clientId)!; // We know user exists from check above
-
-                // if action is unsubscribe and we do not have userid we do not care
-                if (action !== "unsubscribe") {
-                    finalTopic = `${topic}:${user.id}`;
-                }
+                const user = this.clientAuth.get(clientId);
+                if (!user) return;
+                finalTopic = `${topic}:${user.id}`;
             }
 
             switch (action) {

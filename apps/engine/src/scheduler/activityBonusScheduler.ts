@@ -43,8 +43,7 @@ export class ActivityBonusScheduler {
             }
         );
 
-        // Daily at 1:00 AM IST (19:30 UTC, accounting for IST = UTC+5:30)
-        // Check invitation bonuses for all users
+        // Daily fallback at 19:30 IST. Deposits and page reads unlock rewards immediately.
         this.invitationTask = cron.schedule(
             "30 19 * * *",
             async () => {
@@ -77,7 +76,7 @@ export class ActivityBonusScheduler {
         this.invitationTask.start();
 
         logger.info(
-            "Activity Bonus scheduler started successfully. Expiration runs hourly, invitation bonus check runs daily at 1:00 AM IST."
+            "Activity Bonus scheduler started successfully. Expiration runs hourly, invitation bonus fallback runs daily at 7:30 PM IST."
         );
     }
 

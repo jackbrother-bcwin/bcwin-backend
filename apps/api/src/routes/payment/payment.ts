@@ -19,6 +19,7 @@ import { logIpActivity, IpActivityType } from "@/lib/ipActivity";
 import {
     checkAndCreateFirstDepositBonus,
     checkAndCreateDailyBonuses,
+    checkAndCreateReferrerInvitationBonuses,
     creditRechargeBonus,
 } from "@bcwin/activity-bonus";
 import {
@@ -543,6 +544,7 @@ export const paymentRoutes = (app: OpenAPIHono) => {
 
                 checkAndCreateFirstDepositBonus(user.id, principalInr);
                 checkAndCreateDailyBonuses(user.id);
+                await checkAndCreateReferrerInvitationBonuses(user.id);
 
                 const ip = getClientIp(c);
                 if (ip) {

@@ -3,6 +3,7 @@ import { createRoute } from "@hono/zod-openapi";
 
 import { prisma } from "@bcwin/db";
 import Logger from "@bcwin/logger";
+import { checkAndCreateInvitationBonuses } from "@bcwin/activity-bonus";
 import { HTTP_STATUS } from "@/lib/http";
 import { apiError, CommonResponses } from "@/lib/utils";
 import { authCookie } from "@/schemas";
@@ -44,6 +45,10 @@ export const activityBonusesRoutes = (app: OpenAPIHono) => {
         try {
             const user = c.get("user");
             const { page, limit, type, status } = c.req.valid("query");
+
+            if ((!type || type === "INVITATION") && (!status || status === "COMPLETED_UNCOLLECTED")) {
+                await checkAndCreateInvitationBonuses(user.id);
+            }
 
             const skip = (page - 1) * limit;
 

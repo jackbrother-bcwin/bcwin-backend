@@ -15,6 +15,7 @@ import { Cache, CacheKey } from "@bcwin/cache";
 import {
     checkAndCreateFirstDepositBonus,
     checkAndCreateDailyBonuses,
+    checkAndCreateReferrerInvitationBonuses,
     creditRechargeBonus,
 } from "@bcwin/activity-bonus";
 import * as Config from "@bcwin/config";
@@ -422,6 +423,7 @@ export const depositRoutes = (app: OpenAPIHono) => {
             // Fire-and-forget: Check first deposit and daily bonuses
             checkAndCreateFirstDepositBonus(deposit.userId, principalInr);
             checkAndCreateDailyBonuses(deposit.userId);
+            await checkAndCreateReferrerInvitationBonuses(deposit.userId);
 
             // Invalidate deposit cache
             await Cache.del(CacheKey.adminDeposits);

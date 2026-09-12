@@ -67,6 +67,8 @@ user/admin rebate endpoints → self claim → `RebateScheduler` 01:30 settle �
 `tests/api/activity-expiration.test.ts` checks the claim and scheduler policy with database methods mocked.
 `tests/api/activity-expiration.deep.test.ts` exercises real reward creation, legacy deadlines,
 the data migration, authenticated claims, concurrent claims, wallet/wager updates, and rollback.
+`tests/api/invitation-instant.deep.test.ts` covers consecutive tier claims without a cooldown,
+concurrent unlocks, progress/list recovery, all successful-deposit paths, and private live updates.
 
 The deep file is opt-in because the migration and expiry sweep affect all matching rows.
 It requires a disposable **local database named `bcwin_expiry_test`**, with migrations applied,
@@ -77,7 +79,8 @@ DATABASE_URL=postgresql://test:test@127.0.0.1:15432/bcwin_expiry_test \
 REDIS_URL=redis://127.0.0.1:16379 \
 ACTIVITY_EXPIRY_DEEP_TEST=1 \
 bun test --preload ./tests/helpers/preload.ts \
-  tests/api/activity-expiration.test.ts tests/api/activity-expiration.deep.test.ts
+  tests/api/activity-expiration.test.ts tests/api/activity-expiration.deep.test.ts \
+  tests/api/invitation-instant.deep.test.ts
 ```
 
 ## Data cleanup

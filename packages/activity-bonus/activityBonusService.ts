@@ -1,6 +1,7 @@
 import { prisma } from "@bcwin/db";
 import Logger from "@bcwin/logger";
 import { SystemSettings } from "@bcwin/config";
+import { WebSocketManager } from "@bcwin/websocket";
 import { calculateExpirationDate, NON_EXPIRING_BONUS_TYPES } from "./expiration";
 export { EXPIRATION_DAYS } from "./expiration";
 
@@ -175,18 +176,15 @@ export async function getTotalUserSlotBetsInRange(
 }
 
 /**
- * Get count of invited users who have deposited at least minDeposit
+ * Get cumulative successful deposits per direct invitee for all invitation tiers.
  */
-export async function getUserInvitedUsersWithDeposits(
-    userId: string,
-    minDeposit: number
-): Promise<number> {
+export async function getUserInvitedDepositTotals(userId: string): Promise<number[]> {
     const user = await prisma.user.findUnique({
         where: { id: userId },
         select: { referralCode: true },
     });
 
-    if (!user) return 0;
+    if (!user) return [];
 
     // Find all users referred by this user
     const referredUsers = await prisma.user.findMany({
@@ -194,9 +192,9 @@ export async function getUserInvitedUsersWithDeposits(
         select: { id: true },
     });
 
-    if (referredUsers.length === 0) return 0;
+    if (referredUsers.length === 0) return [];
 
-    // Count how many have deposited >= minDeposit
+    // Keep each invitee's cumulative deposits separate.
     const usersWithDeposits = await prisma.deposit.groupBy({
         by: ["userId"],
         where: {
@@ -204,16 +202,14 @@ export async function getUserInvitedUsersWithDeposits(
             status: "SUCCESS",
         },
         _sum: { amount: true },
-        having: {
-            amount: {
-                _sum: {
-                    gte: minDeposit,
-                },
-            },
-        },
     });
 
-    return usersWithDeposits.length;
+    return usersWithDeposits.map((row) => row._sum.amount ?? 0);
+}
+
+export async function getUserInvitedUsersWithDeposits(userId: string, minDeposit: number): Promise<number> {
+    const totals = await getUserInvitedDepositTotals(userId);
+    return totals.filter((total) => total >= minDeposit).length;
 }
 
 /**
@@ -454,23 +450,30 @@ export async function checkAndCreateInvitationBonuses(
             : FALLBACK_INVITATION_TIERS;
 
         for (const uid of userIds) {
-            // Check each tier
-            for (let i = 0; i < tiersToUse.length; i++) {
-                const tier = tiersToUse[i];
+            // Read deposits once for all tiers; thresholds count each direct invitee separately.
+            const totals = await getUserInvitedDepositTotals(uid);
+            const eligible = tiersToUse.flatMap((tier, index) => {
+                const invitedCount = totals.filter((total) => total >= tier.minDeposit).length;
+                return invitedCount >= tier.invites ? [{ tier, index, invitedCount }] : [];
+            });
+            if (eligible.length === 0) continue;
 
-                const invitedCount = await getUserInvitedUsersWithDeposits(
-                    uid,
-                    tier.minDeposit
-                );
-
-                if (invitedCount >= tier.invites) {
-                    // Check if this tier bonus already exists
-                    if (await bonusTierExists(uid, "INVITATION", i)) {
-                        continue;
-                    }
-
-                    // Create new bonus
-                    await prisma.activityBonus.create({
+            const createdCount = await prisma.$transaction(async (tx) => {
+                // Deposit callbacks, page refreshes and the daily sweep may overlap.
+                // Serialize creation for this inviter and recheck tiers under the lock.
+                const users = await tx.$queryRaw<Array<{ id: string }>>`
+                    SELECT id FROM "User" WHERE id = ${uid} FOR UPDATE
+                `;
+                if (users.length === 0) return 0;
+                const existing = await tx.activityBonus.findMany({
+                    where: { userId: uid, type: "INVITATION" },
+                    select: { metadata: true },
+                });
+                const existingTiers = new Set(existing.map((row) => (row.metadata as { tier?: number } | null)?.tier));
+                let created = 0;
+                for (const { tier, index, invitedCount } of eligible) {
+                    if (existingTiers.has(index)) continue;
+                    await tx.activityBonus.create({
                         data: {
                             userId: uid,
                             type: "INVITATION",
@@ -478,24 +481,38 @@ export async function checkAndCreateInvitationBonuses(
                             amount: tier.reward,
                             expiresAt: calculateExpirationDate("INVITATION"),
                             metadata: {
-                                tier: i,
-                                requirement: {
-                                    invites: tier.invites,
-                                    minDeposit: tier.minDeposit,
-                                },
+                                tier: index,
+                                requirement: { invites: tier.invites, minDeposit: tier.minDeposit },
                                 achieved: invitedCount,
                             },
                         },
                     });
-
-                    logger.debug(
-                        `Created invitation bonus tier ${i} for user ${uid}: ${tier.reward}`
-                    );
+                    created++;
                 }
+                return created;
+            });
+            if (createdCount > 0) {
+                await WebSocketManager.publishToUser(uid, "invitation-bonus-update", { createdCount });
             }
         }
     } catch (error) {
         logger.error("Error in checkAndCreateInvitationBonuses:", error);
+    }
+}
+
+/** Check the direct inviter immediately after a successful deposit is committed. */
+export async function checkAndCreateReferrerInvitationBonuses(depositorId: string): Promise<void> {
+    try {
+        const depositor = await prisma.user.findUnique({
+            where: { id: depositorId }, select: { referredBy: true },
+        });
+        if (!depositor?.referredBy) return;
+        const inviter = await prisma.user.findUnique({
+            where: { referralCode: depositor.referredBy }, select: { id: true },
+        });
+        if (inviter) await checkAndCreateInvitationBonuses(inviter.id);
+    } catch (error) {
+        logger.error("Error checking referrer invitation bonuses:", error);
     }
 }
 
