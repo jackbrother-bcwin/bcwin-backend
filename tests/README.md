@@ -69,6 +69,9 @@ user/admin rebate endpoints → self claim → `RebateScheduler` 01:30 settle �
 the data migration, authenticated claims, concurrent claims, wallet/wager updates, and rollback.
 `tests/api/invitation-instant.deep.test.ts` covers consecutive tier claims without a cooldown,
 concurrent unlocks, progress/list recovery, all successful-deposit paths, and private live updates.
+`tests/api/activity-restoration.deep.test.ts` checks recovery of expired daily, invitation,
+and first-deposit rewards, excludes previously paid rewards, verifies repeat runs, and claims
+restored rewards through the authenticated API.
 
 The deep file is opt-in because the migration and expiry sweep affect all matching rows.
 It requires a disposable **local database named `bcwin_expiry_test`**, with migrations applied,
@@ -80,7 +83,7 @@ REDIS_URL=redis://127.0.0.1:16379 \
 ACTIVITY_EXPIRY_DEEP_TEST=1 \
 bun test --preload ./tests/helpers/preload.ts \
   tests/api/activity-expiration.test.ts tests/api/activity-expiration.deep.test.ts \
-  tests/api/invitation-instant.deep.test.ts
+  tests/api/invitation-instant.deep.test.ts tests/api/activity-restoration.deep.test.ts
 ```
 
 ## Data cleanup
